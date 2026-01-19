@@ -1,7 +1,6 @@
 "use strict";
 
 const express = require('express');
-const https = require('http'); /* use http for development only, otherwise http(s)! */
 const http = require('http');
 const hostname = 'lucapleger.com';
 const socketIO = require('socket.io');
@@ -10,13 +9,8 @@ const fs = require("fs");
 const rateLimit = require('express-rate-limit');
 
 const app = express();
-const options = {
-    key: fs.readFileSync("../../ssl/server.key"),
-    cert: fs.readFileSync("../../ssl/lucapleger_com.crt"),
-    ca: fs.readFileSync('../../ssl/lucapleger_com.p7b')
-};
-const serverHTTPS = https.createServer(options, app);
-const io = socketIO(serverHTTPS);
+const serverHTTP = http.createServer(app);
+const io = socketIO(serverHTTP);
 
 // Rate Limiting für API-Endpunkte (z.B. Socket.io)
 const apiLimiter = rateLimit({
@@ -411,15 +405,6 @@ io.on('connection', (socket) => {
     consoleJoinLog();
 });
 
-serverHTTPS.listen(443, () => {
-    console.log('Server läuft auf Port 443');
-});
-
-// Hier startet der HTTP-Server für die Weiterleitung
-const httpServer = http.createServer((req, res) => {
-    res.writeHead(301, { "Location": `https://${req.headers['host']}${req.url}` });
-    res.end();
-});
-httpServer.listen(80, () => {
-    console.log('HTTP Server läuft auf Port 80 und leitet auf HTTPS um');
+serverHTTP.listen(80, () => {
+    console.log('Server läuft auf Port 80');
 });
