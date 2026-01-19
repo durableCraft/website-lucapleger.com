@@ -287,9 +287,9 @@ function socketemit() {
             const abstand = Math.sqrt(Math.pow(objX - (startmowerPositionX + 50), 2) + Math.pow(objY - (startmowerPositionY + 50), 2));
 
             if (abstand <= 40) {
-                score = Math.max(score - 10, 0); /* Score -10 */
                 cooldown = 2;
 
+                // Visuelles Feedback (Schaden) bleibt bestehen
                 document.getElementById('score_damage').style.animation = 'none';
                 void document.getElementById('score_damage').offsetWidth;
                 document.getElementById('score_damage').style.animation = null;
@@ -297,6 +297,7 @@ function socketemit() {
             }
         }
     }
+    
     clientInfo = [startmowerPositionX, startmowerPositionY, mowerRotation, mowerColor, score];
     socket.emit('clientInfo', clientInfo);
 }

@@ -247,6 +247,7 @@ function initialObstacleFlache(amount) {
 initialObstacleFlache(obstacleAnzahl);
 
 let serverInfo = {};
+let playerCooldowns = {};
 const fps = 30;
 let tempDelRasen = [];
 let tempDelFlower = [];
@@ -263,6 +264,7 @@ function gamelogic(x, y, radius, socketIdent) {
         }
     }
 
+    /* 2. Blumen entfernen */
     for (const key in flowerPositionen) {
         const [objX, objY] = flowerPositionen[key];
         const abstand = Math.sqrt(Math.pow(objX - x, 2) + Math.pow(objY - y, 2));
@@ -271,6 +273,27 @@ function gamelogic(x, y, radius, socketIdent) {
             delete flowerPositionen[key];
             serverInfo[socketIdent][4] += 2; /* Score +2 */
             tempDelFlower.push(key);
+        }
+    }
+
+    /* 3. Hindernisse (Steine) prüfen */
+    const now = Date.now();
+    // Prüfen, ob der Spieler existiert und ob sein Cooldown abgelaufen ist
+    if (!playerCooldowns[socketIdent] || now > playerCooldowns[socketIdent]) {
+        for (const key in obstaclePositionen) {
+            const [objX, objY] = obstaclePositionen[key];
+            // Radius 40 entspricht der Logik aus dem Client
+            const abstand = Math.sqrt(Math.pow(objX - x, 2) + Math.pow(objY - y, 2));
+
+            if (abstand <= 40) {
+                // Score abziehen, aber nicht unter 0 gehen
+                serverInfo[socketIdent][4] = Math.max(serverInfo[socketIdent][4] - 10, 0);
+
+                // 2 Sekunden (2000ms) Cooldown setzen
+                playerCooldowns[socketIdent] = now + 2000;
+
+                break;
+            }
         }
     }
 }
@@ -282,7 +305,7 @@ setInterval(() => {
     for (const key in serverInfo) {
         if (Object.hasOwnProperty.call(serverInfo, key)) {
             const element = serverInfo[key];
-            
+
             element[5] = element[0];
             element[6] = element[1];
             element[7] = element[2];
@@ -295,6 +318,7 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         delete serverInfo[socket.id];
+        delete playerCooldowns[socket.id];
 
         const currentDate = new Date();
         const formatedDate = currentDate.getDate() + '.' + (currentDate.getMonth() + 1) + '.' + currentDate.getFullYear() + ' ' + currentDate.getHours() + ':' + currentDate.getMinutes() + ':' + currentDate.getSeconds() + ' - ';
@@ -314,13 +338,14 @@ io.on('connection', (socket) => {
     //Empfange eine Variable vom Client
     socket.on('clientInfo', (data) => {
         if (!serverInfo[socket.id]) {
+            // Initialisierung: Beim ersten Mal nehmen wir die Daten an (meistens 0)
             serverInfo[socket.id] = [data[0], data[1], data[2], data[3], data[4]];
         } else {
+            // Update: Nur Position und Rotation vom Client übernehmen
             serverInfo[socket.id][0] = data[0];
             serverInfo[socket.id][1] = data[1];
             serverInfo[socket.id][2] = data[2];
             serverInfo[socket.id][3] = data[3];
-            serverInfo[socket.id][4] = data[4];
         }
 
         gamelogic(data[0] + 50, data[1] + 50, 40, socket.id);
