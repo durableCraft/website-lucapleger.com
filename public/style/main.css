@@ -1,11 +1,11 @@
 @font-face {
     font-family: silkscreen-regular;
-    src: url('../assets/Silkscreen/Silkscreen-Regular.ttf');
+    src: url('../assets/Silkscreen/Silkscreen-Regular.woff2') format('woff2');
 }
 
 @font-face {
     font-family: silkscreen-bold;
-    src: url('../assets/Silkscreen/Silkscreen-Bold.ttf');
+    src: url('../assets/Silkscreen/Silkscreen-Bold.woff2') format('woff2');
 }
 
 @keyframes dash {
