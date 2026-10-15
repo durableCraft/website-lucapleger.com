@@ -29,10 +29,12 @@ const MOW_R2 = 40 ** 2, HIT_R2 = 40 ** 2, MAX_STEP = 60;
 
 let nextId = 0;
 let grass = {}, flowers = {}, obstacles = {};
-const players = {};          // socket.id -> [x, y, rot, color, score, prevX, prevY, prevRot]
+const players = {};          // socket.id -> [x, y, rot, color, score, age]
+const lastMove = {};         // socket.id -> Zeitpunkt der letzten Positionsänderung
 const cooldowns = {};
 let added = { grass: {}, flowers: {} };
 let removed = { grass: [], flowers: [] };
+let playersChanged = true;  // nur senden, wenn sich etwas geändert hat
 
 const rnd = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
@@ -59,6 +61,7 @@ resetField();
 function mow(id, p) {
     const cx = p[0] + MOWER / 2, cy = p[1] + MOWER / 2;
     const near = ([x, y], r2) => (x - cx) ** 2 + (y - cy) ** 2 <= r2;
+    const scoreBefore = p[4];
 
     for (const k in grass) if (near(grass[k], MOW_R2)) { delete grass[k]; p[4] += 1; removed.grass.push(k); }
     for (const k in flowers) if (near(flowers[k], MOW_R2)) { delete flowers[k]; p[4] += 2; removed.flowers.push(k); }
@@ -69,17 +72,22 @@ function mow(id, p) {
             if (near(obstacles[k], HIT_R2)) { p[4] = Math.max(p[4] - 10, 0); cooldowns[id] = now + 2000; break; }
         }
     }
+    if (p[4] !== scoreBefore) playersChanged = true;
 }
 
 /* ---------- Globale Timer: genau EINMAL, unabhängig von der Spielerzahl ---------- */
-setInterval(() => {                             // ~8 Hz: Positionen + Änderungen
+setInterval(() => {                             // ~16 Hz: Positionen + Änderungen (nur wenn sich etwas bewegt)
     if (removed.grass.length) io.emit('RemoveRasenPartikel', removed.grass);
     if (removed.flowers.length) io.emit('RemoveFlowers', removed.flowers);
     removed = { grass: [], flowers: [] };
 
-    io.emit('serverInfo', players);
-    for (const id in players) { const p = players[id]; p[5] = p[0]; p[6] = p[1]; p[7] = p[2]; }
-}, 120);
+    if (playersChanged) {                       // stehen alle still, wird nichts gesendet
+        const now = Date.now();                 // age: wie viele ms die Position schon alt ist
+        for (const id in players) players[id][5] = Math.min(now - (lastMove[id] || now), 999);
+        io.emit('serverInfo', players, now);    // now = Serverzeit, damit Clients die Positionen zeitlich einordnen können
+        playersChanged = false;
+    }
+}, 60);
 
 setInterval(() => {                             // 1 Hz: Rasen/Blumen nachwachsen lassen
     const g = GRASS_MIN - Object.keys(grass).length;
@@ -102,7 +110,7 @@ io.on('connection', (socket) => {
     let lastMsg = 0;
 
     socket.emit('clientID', socket.id);
-    socket.emit('serverInfo', players);
+    socket.emit('serverInfo', players, Date.now());
     socket.emit('rasenPartikel', grass);
     socket.emit('flowers', flowers);
     socket.emit('obstacles', obstacles);
@@ -119,12 +127,18 @@ io.on('connection', (socket) => {
         let p = players[socket.id];
         if (!p) {
             const c = Number.isInteger(color) && color >= 0 && color <= 6 ? color : 0;
-            p = players[socket.id] = [x, y, rot, c, 0, x, y, rot]; // Score beginnt IMMER bei 0
+            p = players[socket.id] = [x, y, rot, c, 0]; // Score beginnt IMMER bei 0
+            playersChanged = true;
         }
         // Max. Schrittweite pro Nachricht -> kein Teleportieren
-        p[0] = Math.round(clamp(clamp(x, p[0] - MAX_STEP, p[0] + MAX_STEP), 0, W - MOWER));
-        p[1] = Math.round(clamp(clamp(y, p[1] - MAX_STEP, p[1] + MAX_STEP), 0, H - MOWER));
-        p[2] = Math.round(((rot % 360) + 360) % 360);
+        const nx = Math.round(clamp(clamp(x, p[0] - MAX_STEP, p[0] + MAX_STEP), 0, W - MOWER));
+        const ny = Math.round(clamp(clamp(y, p[1] - MAX_STEP, p[1] + MAX_STEP), 0, H - MOWER));
+        const nr = Math.round(((rot % 360) + 360) % 360);
+        if (nx !== p[0] || ny !== p[1] || nr !== p[2]) {
+            p[0] = nx; p[1] = ny; p[2] = nr;
+            lastMove[socket.id] = now;
+            playersChanged = true;
+        }
 
         mow(socket.id, p);
     });
@@ -132,6 +146,8 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         delete players[socket.id];
         delete cooldowns[socket.id];
+        delete lastMove[socket.id];
+        playersChanged = true;
         log(socket.id + ' has left!');
         if (Object.keys(players).length === 0) resetField();
     });

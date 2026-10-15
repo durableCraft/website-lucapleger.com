@@ -78,31 +78,71 @@ socket.on('clientID', (data) => {
     clientID = data;
 });
 
-function interpolateMowerPosition(offsetMowerSpeed, offsetSpeedMultiplier) {
-    for (const key in serverInfo) {
-        if (Object.hasOwnProperty.call(serverInfo, key)) {
-            const element = serverInfo[key];
+/* Interpolation der anderen Mäher
+   Jede Server-Position wird mit dem Zeitpunkt gespeichert, zu dem der andere Spieler
+   dort war. Gezeichnet werden die anderen Mäher INTERP_DELAY ms in der Vergangenheit,
+   genau zwischen zwei bekannten Positionen. So gibt es kein Ruckeln, auch wenn
+   Pakete mal etwas früher oder später ankommen. */
+const INTERP_DELAY = 120;  // ms; muss größer sein als Server-Takt (60 ms) + Sendeintervall (40 ms) + etwas Puffer.
+                           // Ruckeln fremde Mäher bei schlechter Verbindung, diesen Wert um 20–40 erhöhen.
+const remoteMowers = {};   // id -> { snaps: [{ t, x, y, r }], cur: [x, y, r], color }
+let clockOffset = null;    // Unterschied zwischen eigener Uhr und Server-Uhr
 
-            const deltaX = Math.sign(element[0] - element[5]);
-            const deltaY = Math.sign(element[1] - element[6]);
+socket.on('serverInfo', (data, serverTime) => {
+    // Uhrenabgleich: das am wenigsten verzögerte Paket bestimmt den Abstand.
+    // So verfälschen späte Pakete oder ein kurz blockierter Browser die Zeiten nicht.
+    const sample = performance.now() - serverTime;
+    clockOffset = clockOffset === null ? sample : Math.min(sample, clockOffset + 1);
 
-            // Kürzesten Drehwinkel zwischen aktueller Rotation und Zielrotation berechnen
-            const angleDiff = (((element[2] - element[7]) + 180) % 360 + 360) % 360 - 180;
+    for (const id in data) {
+        const [x, y, r, color, , age] = data[id];
+        const t = serverTime - (age || 0) + clockOffset; // Zeitpunkt, zu dem der Spieler dort war
+        let m = remoteMowers[id];
+        if (!m) m = remoteMowers[id] = { snaps: [], cur: [x, y, r], color };
 
-            // Drehung anpassen (maximal 10 Grad pro Schritt)
-            let rotationStep = Math.sign(angleDiff) * Math.min(10 / offsetSpeedMultiplier, Math.abs(angleDiff));
-
-            serverInfo[key][5] = element[5] + deltaX * offsetMowerSpeed;
-            serverInfo[key][6] = element[6] + deltaY * offsetMowerSpeed;
-            serverInfo[key][7] = (element[7] + rotationStep + 360) % 360;
+        const last = m.snaps[m.snaps.length - 1];
+        if (last && last.x === x && last.y === y && last.r === r) continue; // keine Bewegung
+        if (last && t - last.t > 250) {
+            // Spieler stand still und fährt jetzt los: Startpunkt kurz vor der neuen Position setzen
+            m.snaps.push({ t: t - 1000 / fps, x: last.x, y: last.y, r: last.r });
         }
+        if (!last || t > last.t) m.snaps.push({ t, x, y, r });
+        if (m.snaps.length > 30) m.snaps.shift();
     }
+    for (const id in remoteMowers) {
+        if (!(id in data)) delete remoteMowers[id]; // Spieler hat das Spiel verlassen
+    }
+
+    serverInfo = data;
+    if (data[clientID] !== undefined) score = data[clientID][4];
+});
+
+function updateRemoteMower(m, renderTime) {
+    const s = m.snaps;
+    while (s.length > 2 && s[1].t <= renderTime) s.shift(); // verbrauchte Positionen entfernen
+
+    const a = s[0], b = s[1];
+    if (!b || renderTime <= a.t) { m.cur = [a.x, a.y, a.r]; return; }
+    if (renderTime >= b.t) { m.cur = [b.x, b.y, b.r]; return; }
+
+    const k = (renderTime - a.t) / (b.t - a.t);
+    let dRot = (b.r - a.r) % 360;
+    dRot = ((dRot + 540) % 360) - 180; // kürzester Drehweg
+    m.cur = [a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, (a.r + dRot * k + 360) % 360];
 }
 
-socket.on('serverInfo', (data) => {
-    serverInfo = data;
-    if (serverInfo[clientID] !== undefined) score = serverInfo[clientID][4];
-});
+/* Eigenes Mähen sofort anzeigen (der Server bestätigt es kurz danach) */
+function mowLocally() {
+    const cx = startmowerPositionX + mowerSize / 2, cy = startmowerPositionY + mowerSize / 2;
+    for (const key in rasenPositionen) {
+        const [x, y] = rasenPositionen[key];
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= 1600) delete rasenPositionen[key];
+    }
+    for (const key in flowerPositionen) {
+        const [x, y] = flowerPositionen[key];
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= 1600) delete flowerPositionen[key];
+    }
+}
 
 socket.on('rasenPartikel', (data) => {
     rasenPositionen = data;
@@ -116,16 +156,13 @@ socket.on('obstacles', (data) => {
     obstaclePositionen = data;
 });
 
+/* Von anderen gemähter Rasen verschwindet erst, wenn deren Mäher (verzögert angezeigt) dort ist */
 socket.on('RemoveRasenPartikel', (data) => {
-    data.forEach(element => {
-        delete rasenPositionen[element];
-    });
+    setTimeout(() => data.forEach(key => delete rasenPositionen[key]), INTERP_DELAY);
 });
 
 socket.on('RemoveFlowers', (data) => {
-    data.forEach(element => {
-        delete flowerPositionen[element];
-    });
+    setTimeout(() => data.forEach(key => delete flowerPositionen[key]), INTERP_DELAY);
 });
 
 socket.on('AddRasenPartikel', (data) => {
@@ -222,16 +259,15 @@ setInterval(() => {
 function gamelogic() {
     logicFPS++;
     const currentTime = performance.now();
-    const timeOffset = currentTime - lastUpdatedDate;
+    const timeOffset = Math.min(currentTime - lastUpdatedDate, 100); /* z. B. nach Tab-Wechsel nicht springen */
     const offsetSpeedMultiplier = (1000 / 60) / timeOffset;
     lastUpdatedDate = currentTime;
 
     offsetMowerSpeed = mowerSpeed / offsetSpeedMultiplier;
+    updateMotionAndRotation(); /* Bewegung mit der Zeit DIESES Frames berechnen */
 
     startmowerPositionX += motionX;
     startmowerPositionY += motionY;
-
-    interpolateMowerPosition(offsetMowerSpeed, offsetSpeedMultiplier);
 
     // Kürzesten Drehwinkel zwischen aktueller Rotation und Zielrotation berechnen
     let angleDiff = targetRotation - mowerRotation;
@@ -252,8 +288,6 @@ function gamelogic() {
     } else if (startmowerPositionY + mowerSize > canvas.height) {
         startmowerPositionY = canvas.height - mowerSize;
     }
-
-    updateMotionAndRotation();
 }
 
 let lastSent = '';
@@ -263,6 +297,7 @@ function socketemit() {
     const state = startmowerPositionX + ',' + startmowerPositionY + ',' + mowerRotation;
     if (state === lastSent) return; /* Mäher steht still -> nichts senden */
     lastSent = state;
+    mowLocally();
 
     if (cooldown <= 0) {
         for (const key in obstaclePositionen) {
@@ -338,28 +373,17 @@ function animate() {
     ctx.rotate(-mowerRotation * Math.PI / 180);
     ctx.translate(-(startmowerPositionX + mowerSize / 2), -(startmowerPositionY + mowerSize / 2));
 
-    for (const key in serverInfo) {
-        if (Object.hasOwnProperty.call(serverInfo, key)) {
-            if (clientID !== key) {
-                ctx.save();
+    const renderTime = performance.now() - INTERP_DELAY;
+    for (const key in remoteMowers) {
+        if (key === clientID) continue;
+        const m = remoteMowers[key];
+        updateRemoteMower(m, renderTime);
 
-                // Den Ursprung auf die Mitte des Bildes verschieben
-                ctx.translate(serverInfo[key][5] + mowerSize / 2, serverInfo[key][6] + mowerSize / 2);
-
-                // Das Bild um die eigene Achse drehen
-                ctx.rotate(serverInfo[key][7] * Math.PI / 180);
-
-                // Das Bild zeichnen (Berücksichtigen Sie die Verschiebung des Ursprungs)
-                const differentMower = mowerImgs[serverInfo[key][3]] || mowerImgs[0];
-                ctx.drawImage(differentMower, -mowerSize / 2, -mowerSize / 2, mowerSize, mowerSize);
-
-                // Die Transformationen zurücksetzen
-                ctx.rotate(-serverInfo[key][7] * Math.PI / 180);
-                ctx.translate(-(serverInfo[key][5] + mowerSize / 2), -(serverInfo[key][6] + mowerSize / 2));
-
-                ctx.restore();
-            }
-        }
+        ctx.save();
+        ctx.translate(m.cur[0] + mowerSize / 2, m.cur[1] + mowerSize / 2);
+        ctx.rotate(m.cur[2] * Math.PI / 180);
+        ctx.drawImage(mowerImgs[m.color] || mowerImgs[0], -mowerSize / 2, -mowerSize / 2, mowerSize, mowerSize);
+        ctx.restore();
     }
 
     canvas.style.transform = 'translate(' + ((window.innerWidth / 2) - startmowerPositionX - 50 - mowerSize / 2) + 'px, ' + ((window.innerHeight / 2) - startmowerPositionY - 50 - mowerSize / 2) + 'px)';
