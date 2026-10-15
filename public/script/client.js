@@ -32,7 +32,7 @@ let logicFPS = 0;
 let displayRenderFPS = 0;
 let displayLogicFPS = 0;
 const socket = io();
-let clientID = "undefined";
+let clientID = null; /* 8-stellige Spieler-ID vom Server */
 
 const mowerSize = 100;
 let motionX = 0;
@@ -72,8 +72,6 @@ function getMowerColor() {
 
 let mowerColor = getMowerColor();
 let clientInfo = [startmowerPositionX, startmowerPositionY, mowerRotation, mowerColor, score];
-let serverInfo = {};
-
 socket.on('clientID', (data) => {
     clientID = data;
 });
@@ -85,20 +83,22 @@ socket.on('clientID', (data) => {
    Pakete mal etwas früher oder später ankommen. */
 const INTERP_DELAY = 120;  // ms; muss größer sein als Server-Takt (60 ms) + Sendeintervall (40 ms) + etwas Puffer.
                            // Ruckeln fremde Mäher bei schlechter Verbindung, diesen Wert um 20–40 erhöhen.
-const remoteMowers = {};   // id -> { snaps: [{ t, x, y, r }], cur: [x, y, r], color }
+const remoteMowers = new Map(); // Spieler-ID -> { snaps: [{ t, x, y, r }], cur: [x, y, r], color }
 let clockOffset = null;    // Unterschied zwischen eigener Uhr und Server-Uhr
 
-socket.on('serverInfo', (data, serverTime) => {
+/* Der Server schickt nur Spieler, die sich geändert haben: [[id, x, y, rot, farbe, score, age], ...] */
+socket.on('players', (list, serverTime) => {
     // Uhrenabgleich: das am wenigsten verzögerte Paket bestimmt den Abstand.
     // So verfälschen späte Pakete oder ein kurz blockierter Browser die Zeiten nicht.
     const sample = performance.now() - serverTime;
     clockOffset = clockOffset === null ? sample : Math.min(sample, clockOffset + 1);
 
-    for (const id in data) {
-        const [x, y, r, color, , age] = data[id];
-        const t = serverTime - (age || 0) + clockOffset; // Zeitpunkt, zu dem der Spieler dort war
-        let m = remoteMowers[id];
-        if (!m) m = remoteMowers[id] = { snaps: [], cur: [x, y, r], color };
+    for (const [id, x, y, r, color, playerScore, age] of list) {
+        if (id === clientID) { score = playerScore; continue; } // eigener Eintrag: nur der Score zählt
+
+        const t = serverTime - age + clockOffset; // Zeitpunkt, zu dem der Spieler dort war
+        let m = remoteMowers.get(id);
+        if (!m) remoteMowers.set(id, m = { snaps: [], cur: [x, y, r], color });
 
         const last = m.snaps[m.snaps.length - 1];
         if (last && last.x === x && last.y === y && last.r === r) continue; // keine Bewegung
@@ -109,13 +109,9 @@ socket.on('serverInfo', (data, serverTime) => {
         if (!last || t > last.t) m.snaps.push({ t, x, y, r });
         if (m.snaps.length > 30) m.snaps.shift();
     }
-    for (const id in remoteMowers) {
-        if (!(id in data)) delete remoteMowers[id]; // Spieler hat das Spiel verlassen
-    }
-
-    serverInfo = data;
-    if (data[clientID] !== undefined) score = data[clientID][4];
 });
+
+socket.on('playerLeft', (id) => remoteMowers.delete(id));
 
 function updateRemoteMower(m, renderTime) {
     const s = m.snaps;
@@ -291,7 +287,10 @@ function gamelogic() {
 }
 
 let lastSent = '';
-socket.on('connect', () => { lastSent = ''; }); /* nach (Neu-)Verbindung einmal senden */
+socket.on('connect', () => {   /* nach (Neu-)Verbindung, z. B. Server-Neustart */
+    lastSent = '';               // eigene Position einmal senden
+    remoteMowers.clear();        // Server schickt gleich alle aktuellen Spieler
+});
 
 function socketemit() {
     const state = startmowerPositionX + ',' + startmowerPositionY + ',' + mowerRotation;
@@ -374,9 +373,7 @@ function animate() {
     ctx.translate(-(startmowerPositionX + mowerSize / 2), -(startmowerPositionY + mowerSize / 2));
 
     const renderTime = performance.now() - INTERP_DELAY;
-    for (const key in remoteMowers) {
-        if (key === clientID) continue;
-        const m = remoteMowers[key];
+    for (const m of remoteMowers.values()) {
         updateRemoteMower(m, renderTime);
 
         ctx.save();

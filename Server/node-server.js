@@ -29,16 +29,27 @@ const MOW_R2 = 40 ** 2, HIT_R2 = 40 ** 2, MAX_STEP = 60;
 
 let nextId = 0;
 let grass = {}, flowers = {}, obstacles = {};
-const players = {};          // socket.id -> [x, y, rot, color, score, age]
-const lastMove = {};         // socket.id -> Zeitpunkt der letzten Positionsänderung
-const cooldowns = {};
+const players = {};          // socket.id -> { id, x, y, rot, color, score, moved, cooldown }
+const changed = new Set();   // Spieler, die sich seit dem letzten Senden geändert haben
+const usedIds = new Set();   // vergebene Spieler-IDs
 let added = { grass: {}, flowers: {} };
 let removed = { grass: [], flowers: [] };
-let playersChanged = true;  // nur senden, wenn sich etwas geändert hat
 
 const rnd = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 const log = (msg) => console.log(new Date().toLocaleString('de-DE') + ' - ' + msg);
+
+/* Kurze 8-stellige Spieler-ID statt der 20 Zeichen langen Socket-ID */
+function newPlayerId() {
+    let id;
+    do { id = rnd(10000000, 99999999); } while (usedIds.has(id));
+    usedIds.add(id);
+    return id;
+}
+
+/* Ein Spieler im Paket: [id, x, y, rot, farbe, score, age]
+   age = wie viele ms die Position schon alt ist (für die Interpolation beim Client) */
+const packPlayer = (p, now) => [p.id, p.x, p.y, p.rot, p.color, p.score, Math.min(now - p.moved, 999)];
 
 function spawn(target, amount, diff, withType = false) {
     for (let i = 0; i < amount; i++) {
@@ -58,34 +69,35 @@ function resetField() {
 }
 resetField();
 
-function mow(id, p) {
-    const cx = p[0] + MOWER / 2, cy = p[1] + MOWER / 2;
+function mow(sid, p) {
+    const cx = p.x + MOWER / 2, cy = p.y + MOWER / 2;
     const near = ([x, y], r2) => (x - cx) ** 2 + (y - cy) ** 2 <= r2;
-    const scoreBefore = p[4];
+    const scoreBefore = p.score;
 
-    for (const k in grass) if (near(grass[k], MOW_R2)) { delete grass[k]; p[4] += 1; removed.grass.push(k); }
-    for (const k in flowers) if (near(flowers[k], MOW_R2)) { delete flowers[k]; p[4] += 2; removed.flowers.push(k); }
+    for (const k in grass) if (near(grass[k], MOW_R2)) { delete grass[k]; p.score += 1; removed.grass.push(k); }
+    for (const k in flowers) if (near(flowers[k], MOW_R2)) { delete flowers[k]; p.score += 2; removed.flowers.push(k); }
 
     const now = Date.now();
-    if ((cooldowns[id] || 0) < now) {
+    if (p.cooldown < now) {
         for (const k in obstacles) {
-            if (near(obstacles[k], HIT_R2)) { p[4] = Math.max(p[4] - 10, 0); cooldowns[id] = now + 2000; break; }
+            if (near(obstacles[k], HIT_R2)) { p.score = Math.max(p.score - 10, 0); p.cooldown = now + 2000; break; }
         }
     }
-    if (p[4] !== scoreBefore) playersChanged = true;
+    if (p.score !== scoreBefore) changed.add(sid);
 }
 
 /* ---------- Globale Timer: genau EINMAL, unabhängig von der Spielerzahl ---------- */
-setInterval(() => {                             // ~16 Hz: Positionen + Änderungen (nur wenn sich etwas bewegt)
+setInterval(() => {                             // ~16 Hz: Änderungen senden (nur wenn sich etwas bewegt)
     if (removed.grass.length) io.emit('RemoveRasenPartikel', removed.grass);
     if (removed.flowers.length) io.emit('RemoveFlowers', removed.flowers);
     removed = { grass: [], flowers: [] };
 
-    if (playersChanged) {                       // stehen alle still, wird nichts gesendet
-        const now = Date.now();                 // age: wie viele ms die Position schon alt ist
-        for (const id in players) players[id][5] = Math.min(now - (lastMove[id] || now), 999);
-        io.emit('serverInfo', players, now);    // now = Serverzeit, damit Clients die Positionen zeitlich einordnen können
-        playersChanged = false;
+    if (changed.size) {                         // nur die Spieler, die sich geändert haben
+        const now = Date.now();
+        const list = [];
+        for (const sid of changed) if (players[sid]) list.push(packPlayer(players[sid], now));
+        changed.clear();
+        if (list.length) io.emit('players', list, now); // now = Serverzeit für die Interpolation
     }
 }, 60);
 
@@ -106,11 +118,13 @@ setInterval(() => {                             // Vollabgleich alle 15 s
 
 /* ---------- Verbindungen ---------- */
 io.on('connection', (socket) => {
-    log(socket.id + ' has joined!');
+    const pid = newPlayerId();
+    log(pid + ' has joined!');
     let lastMsg = 0;
 
-    socket.emit('clientID', socket.id);
-    socket.emit('serverInfo', players, Date.now());
+    const now = Date.now();
+    socket.emit('clientID', pid);
+    socket.emit('players', Object.values(players).map(p => packPlayer(p, now)), now); // alle bisherigen Spieler
     socket.emit('rasenPartikel', grass);
     socket.emit('flowers', flowers);
     socket.emit('obstacles', obstacles);
@@ -127,17 +141,17 @@ io.on('connection', (socket) => {
         let p = players[socket.id];
         if (!p) {
             const c = Number.isInteger(color) && color >= 0 && color <= 6 ? color : 0;
-            p = players[socket.id] = [x, y, rot, c, 0]; // Score beginnt IMMER bei 0
-            playersChanged = true;
+            p = players[socket.id] = { id: pid, x: Math.round(x), y: Math.round(y), rot: 0, color: c, score: 0, moved: now, cooldown: 0 }; // Score beginnt IMMER bei 0
+            changed.add(socket.id);
         }
         // Max. Schrittweite pro Nachricht -> kein Teleportieren
-        const nx = Math.round(clamp(clamp(x, p[0] - MAX_STEP, p[0] + MAX_STEP), 0, W - MOWER));
-        const ny = Math.round(clamp(clamp(y, p[1] - MAX_STEP, p[1] + MAX_STEP), 0, H - MOWER));
+        const nx = Math.round(clamp(clamp(x, p.x - MAX_STEP, p.x + MAX_STEP), 0, W - MOWER));
+        const ny = Math.round(clamp(clamp(y, p.y - MAX_STEP, p.y + MAX_STEP), 0, H - MOWER));
         const nr = Math.round(((rot % 360) + 360) % 360);
-        if (nx !== p[0] || ny !== p[1] || nr !== p[2]) {
-            p[0] = nx; p[1] = ny; p[2] = nr;
-            lastMove[socket.id] = now;
-            playersChanged = true;
+        if (nx !== p.x || ny !== p.y || nr !== p.rot) {
+            p.x = nx; p.y = ny; p.rot = nr;
+            p.moved = now;
+            changed.add(socket.id);
         }
 
         mow(socket.id, p);
@@ -145,10 +159,10 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         delete players[socket.id];
-        delete cooldowns[socket.id];
-        delete lastMove[socket.id];
-        playersChanged = true;
-        log(socket.id + ' has left!');
+        changed.delete(socket.id);
+        usedIds.delete(pid);
+        io.emit('playerLeft', pid);
+        log(pid + ' has left!');
         if (Object.keys(players).length === 0) resetField();
     });
 });
