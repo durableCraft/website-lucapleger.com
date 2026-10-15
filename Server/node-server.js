@@ -32,6 +32,8 @@ let grass = {}, flowers = {}, obstacles = {};
 const players = {};          // socket.id -> { id, x, y, rot, color, score, moved, cooldown }
 const changed = new Set();   // Spieler, die sich seit dem letzten Senden geändert haben
 const usedIds = new Set();   // vergebene Spieler-IDs
+const names = new Map();     // Spieler-ID -> Anzeigename
+const NAME_MAX = 16;
 let added = { grass: {}, flowers: {} };
 let removed = { grass: [], flowers: [] };
 
@@ -46,6 +48,11 @@ function newPlayerId() {
     usedIds.add(id);
     return id;
 }
+
+/* Anzeigename prüfen: nur Text, keine Steuerzeichen, max. 16 Zeichen */
+const cleanName = (name) => typeof name === 'string'
+    ? name.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX)
+    : '';
 
 /* Ein Spieler im Paket: [id, x, y, rot, farbe, score, age]
    age = wie viele ms die Position schon alt ist (für die Interpolation beim Client) */
@@ -121,6 +128,7 @@ io.on('connection', (socket) => {
     const pid = newPlayerId();
     log(pid + ' has joined!');
     let lastMsg = 0;
+    let lastNameChange = 0;
 
     const now = Date.now();
     socket.emit('clientID', pid);
@@ -128,6 +136,18 @@ io.on('connection', (socket) => {
     socket.emit('rasenPartikel', grass);
     socket.emit('flowers', flowers);
     socket.emit('obstacles', obstacles);
+    socket.emit('names', [...names]);           // Namen aller bisherigen Spieler
+
+    socket.on('setName', (name) => {
+        const now = Date.now();
+        if (now - lastNameChange < 1000) return; // max. 1 Namensänderung pro Sekunde
+        lastNameChange = now;
+
+        name = cleanName(name);
+        if (!name || names.get(pid) === name) return;
+        names.set(pid, name);
+        io.emit('names', [[pid, name]]);        // nur bei Änderung, nicht in jedem Positions-Paket
+    });
 
     socket.on('clientInfo', (data) => {
         const now = Date.now();
@@ -161,6 +181,7 @@ io.on('connection', (socket) => {
         delete players[socket.id];
         changed.delete(socket.id);
         usedIds.delete(pid);
+        names.delete(pid);
         io.emit('playerLeft', pid);
         log(pid + ' has left!');
         if (Object.keys(players).length === 0) resetField();

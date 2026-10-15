@@ -111,7 +111,159 @@ socket.on('players', (list, serverTime) => {
     }
 });
 
-socket.on('playerLeft', (id) => remoteMowers.delete(id));
+socket.on('playerLeft', (id) => {
+    remoteMowers.delete(id);
+    playerNames.delete(id);
+});
+
+/* ---------- Namensschilder ---------- */
+const NAME_MAX = 16;                       // gleiche Grenze wie auf dem Server
+const NAME_STORAGE_KEY = 'rasenrasen-name';
+const TAG_FONT = '16px silkscreen-regular';
+const TAG_HEIGHT = 24, TAG_PADDING = 6, TAG_GAP = 14, TAG_RADIUS = 4; // GAP = Abstand zum Mäher
+const nameInput = document.getElementById('name_input');
+const playerNames = new Map();             // Spieler-ID -> Anzeigename
+let editingName = false;
+
+function generateName() {
+    const adjektive = ['Flinker', 'Grüner', 'Wilder', 'Schneller', 'Fleißiger', 'Mutiger', 'Kleiner', 'Lustiger', 'Stiller', 'Wackerer'];
+    const namen = ['Igel', 'Gärtner', 'Maulwurf', 'Grashüpfer', 'Regenwurm', 'Hase', 'Gartenzwerg', 'Käfer', 'Spatz', 'Mäher',
+        'Dachs', 'Fuchs', 'Frosch', 'Biber', 'Specht', 'Luchs', 'Molch', 'Rabe', 'Kauz', 'Marder'];
+    const pick = (list) => list[Math.floor(Math.random() * list.length)];
+    let name;
+    do { name = pick(adjektive) + ' ' + pick(namen); } while (name.length > NAME_MAX); // max. 16 Zeichen
+    return name;
+}
+
+function cleanName(name) {
+    return String(name).replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX);
+}
+
+function loadName() {
+    try { return cleanName(localStorage.getItem(NAME_STORAGE_KEY) || ''); } catch (e) { return ''; }
+}
+
+function saveName(name) {
+    try {
+        if (name) localStorage.setItem(NAME_STORAGE_KEY, name);
+        else localStorage.removeItem(NAME_STORAGE_KEY);
+    } catch (e) { /* z. B. privates Fenster: Name gilt dann nur für diesen Besuch */ }
+}
+
+let myName = loadName() || generateName();
+
+socket.on('names', (list) => {
+    for (const [id, name] of list) playerNames.set(id, name);
+});
+
+/* Position und Größe eines Namensschilds über einem Mäher (in Canvas-Koordinaten) */
+const tagWidths = new Map();               // Name -> Breite, damit nicht jedes Frame neu gemessen wird
+function nameTagRect(name, mowerX, mowerY) {
+    let w = tagWidths.get(name);
+    if (w === undefined) {
+        ctx.font = TAG_FONT;
+        w = Math.ceil(ctx.measureText(name).width) + TAG_PADDING * 2;
+        if (tagWidths.size > 200) tagWidths.clear();
+        tagWidths.set(name, w);
+    }
+    const x = Math.round(Math.min(Math.max(mowerX + mowerSize / 2 - w / 2, 0), canvas.width - w));
+    let y = Math.round(mowerY - TAG_HEIGHT - TAG_GAP);
+    if (y < 0) y = Math.round(mowerY + mowerSize + TAG_GAP); // am oberen Rand: Schild unter den Mäher
+    return { x, y, w, h: TAG_HEIGHT };
+}
+
+/* Rechteck mit abgerundeten Ecken (funktioniert auch in älteren Browsern ohne ctx.roundRect) */
+function roundedRect(x, y, w, h, radius) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + w, y, x + w, y + h, radius);
+    ctx.arcTo(x + w, y + h, x, y + h, radius);
+    ctx.arcTo(x, y + h, x, y, radius);
+    ctx.arcTo(x, y, x + w, y, radius);
+    ctx.closePath();
+}
+
+function drawNameTag(name, mowerX, mowerY) {
+    const r = nameTagRect(name, mowerX, mowerY);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    roundedRect(r.x, r.y, r.w, r.h, TAG_RADIUS);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';   // kleiner Pixel-Schatten wie bei Minecraft
+    ctx.fillText(name, r.x + TAG_PADDING + 2, r.y + r.h / 2 + 2);
+    ctx.fillStyle = 'rgb(225, 225, 225)';
+    ctx.fillText(name, r.x + TAG_PADDING, r.y + r.h / 2);
+}
+
+function drawNameTags() {
+    ctx.font = TAG_FONT;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    for (const [id, m] of remoteMowers) {
+        const name = playerNames.get(id);
+        if (name) drawNameTag(name, m.cur[0], m.cur[1]);
+    }
+    if (!editingName) drawNameTag(myName, startmowerPositionX, startmowerPositionY);
+}
+
+/* Bildschirm-Koordinaten -> Canvas-Koordinaten (der Canvas wird per CSS verschoben) */
+function toCanvas(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: clientX - rect.left - canvas.clientLeft, y: clientY - rect.top - canvas.clientTop };
+}
+
+function isOnOwnTag(clientX, clientY) {
+    const p = toCanvas(clientX, clientY);
+    const r = nameTagRect(myName, startmowerPositionX, startmowerPositionY);
+    return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
+function openNameEditor() {
+    const r = nameTagRect(myName, startmowerPositionX, startmowerPositionY);
+    const rect = canvas.getBoundingClientRect();
+    editingName = true;
+    nameInput.value = myName;
+    nameInput.style.left = (rect.left + canvas.clientLeft + r.x) + 'px';
+    nameInput.style.top = (rect.top + canvas.clientTop + r.y) + 'px';
+    nameInput.style.width = r.w + 'px';
+    nameInput.style.display = 'block';
+    nameInput.focus();
+    nameInput.select();
+}
+
+function closeNameEditor(save) {
+    if (!editingName) return;
+    editingName = false;
+    nameInput.style.display = 'none';
+    if (save) {
+        const name = cleanName(nameInput.value);
+        saveName(name);                     // leer = eigener Name gelöscht
+        myName = name || generateName();
+        socket.emit('setName', myName);
+    }
+    nameInput.blur();
+}
+
+/* Tasten im Eingabefeld nicht an das Spiel weitergeben (sonst fährt der Mäher beim Tippen) */
+nameInput.addEventListener('keydown', (event) => event.stopPropagation());
+nameInput.addEventListener('keyup', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') closeNameEditor(true);
+    if (event.key === 'Escape') closeNameEditor(false);
+});
+nameInput.addEventListener('blur', () => closeNameEditor(true));
+nameInput.addEventListener('input', () => {   // Feld wächst mit dem Namen mit
+    ctx.font = TAG_FONT;
+    nameInput.style.width = Math.max(40, Math.ceil(ctx.measureText(nameInput.value).width) + TAG_PADDING * 2 + 4) + 'px';
+});
+
+window.addEventListener('click', (event) => {
+    if (editingName || event.target.closest('a, button, input')) return;
+    if (isOnOwnTag(event.clientX, event.clientY)) openNameEditor();
+});
+
+window.addEventListener('mousemove', (event) => {
+    document.body.style.cursor = !editingName && isOnOwnTag(event.clientX, event.clientY) ? 'pointer' : '';
+});
 
 function updateRemoteMower(m, renderTime) {
     const s = m.snaps;
@@ -289,6 +441,7 @@ function gamelogic() {
 let lastSent = '';
 socket.on('connect', () => {   /* nach (Neu-)Verbindung, z. B. Server-Neustart */
     lastSent = '';               // eigene Position einmal senden
+    socket.emit('setName', myName);
     remoteMowers.clear();        // Server schickt gleich alle aktuellen Spieler
 });
 
@@ -382,6 +535,8 @@ function animate() {
         ctx.drawImage(mowerImgs[m.color] || mowerImgs[0], -mowerSize / 2, -mowerSize / 2, mowerSize, mowerSize);
         ctx.restore();
     }
+
+    drawNameTags();
 
     canvas.style.transform = 'translate(' + ((window.innerWidth / 2) - startmowerPositionX - 50 - mowerSize / 2) + 'px, ' + ((window.innerHeight / 2) - startmowerPositionY - 50 - mowerSize / 2) + 'px)';
 
@@ -502,6 +657,7 @@ function getDirection(x, y) {
 }
 
 window.addEventListener('touchstart', function (event) {
+    if (event.target === nameInput) return; // beim Antippen des Namensfelds keinen Joystick zeigen
     let touch = event.touches[0];
     const posX = touch.clientX - 40;
     const posY = touch.clientY - 40;
