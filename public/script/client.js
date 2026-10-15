@@ -3,7 +3,6 @@
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 ctx.imageSmoothingEnabled = false;
-const mowerImg = new Image;
 const mowerURL = [
     'images/mower.png',
     'images/mower_2.png',
@@ -13,20 +12,11 @@ const mowerURL = [
     'images/mower_6.png',
     'images/mower_0.png'
 ];
-const mower0 = new Image;
-mower0.src = mowerURL[6];
-const mower1 = new Image;
-mower1.src = mowerURL[0];
-const mower2 = new Image;
-mower2.src = mowerURL[1];
-const mower3 = new Image;
-mower3.src = mowerURL[2];
-const mower4 = new Image;
-mower4.src = mowerURL[3];
-const mower5 = new Image;
-mower5.src = mowerURL[4];
-const mower6 = new Image;
-mower6.src = mowerURL[5];
+const mowerImgs = mowerURL.map(src => {
+    const img = new Image();
+    img.src = src;
+    return img;
+});
 
 const flowerImg = new Image;
 flowerImg.src = 'images/flower.png';
@@ -53,7 +43,6 @@ let startmowerPositionX = (canvas.width / 2) - (mowerSize / 2);
 let startmowerPositionY = (canvas.height / 2) - (mowerSize / 2);
 let mowerRotation = 0;
 let targetRotation = 0;
-const rasenPartikelAnzahl = 300;
 let rasenPositionen = {};
 let flowerPositionen = {};
 let obstaclePositionen = {};
@@ -61,7 +50,7 @@ let keysState = {};
 const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 let score = 0;
 let cooldown = 0;
-let lastUpdatedDate = new Date().getTime();
+let lastUpdatedDate = performance.now();
 
 function isTouchScreen() {
     return 'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
@@ -84,7 +73,6 @@ function getMowerColor() {
 let mowerColor = getMowerColor();
 let clientInfo = [startmowerPositionX, startmowerPositionY, mowerRotation, mowerColor, score];
 let serverInfo = {};
-mowerImg.src = mowerURL[mowerColor];
 
 socket.on('clientID', (data) => {
     clientID = data;
@@ -172,14 +160,6 @@ function emulateKeyUpAll() {
     keysState[68] = false;
 }
 
-window.addEventListener('touchcancel', function () {
-    emulateKeyUpAll();
-});
-
-window.addEventListener('touchend', function () {
-    emulateKeyUpAll();
-});
-
 // Aktualisieren Sie die Bewegung und Rotation basierend auf dem aktuellen Tastenzustand
 function updateMotionAndRotation() {
     // Standardwerte
@@ -230,21 +210,18 @@ function updateMotionAndRotation() {
 }
 
 /* Developer Anzeige */
+const devAnzeige = document.getElementById('dev_anzeige');
+const scoreAnzeige = document.getElementById('score');
+const scoreDamage = document.getElementById('score_damage');
+
 setInterval(() => {
-    document.getElementById('dev_anzeige').textContent = 'RasenRasen Client-ID: ' + clientID + ' Motion-X: ' + motionX + ' Motion-Y: ' + motionY + ' Rotation: ' + mowerRotation + ' Engine-FPS: ' + displayLogicFPS + ' FPS: ' + displayRenderFPS;
-    document.getElementById('score').textContent = 'Score: ' + score;
+    if (devAnzeige.style.display !== 'none') devAnzeige.textContent = 'RasenRasen Client-ID: ' + clientID + ' Motion-X: ' + motionX + ' Motion-Y: ' + motionY + ' Rotation: ' + mowerRotation + ' Engine-FPS: ' + displayLogicFPS + ' FPS: ' + displayRenderFPS;
+    scoreAnzeige.textContent = 'Score: ' + score;
 }, 800);
-
-canvas.style.top = (window.innerHeight / 2) - (canvas.height / 2);
-canvas.style.left = (window.innerWidth / 2) - (canvas.width / 2);
-
-function getRandomInteger(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
 
 function gamelogic() {
     logicFPS++;
-    const currentTime = new Date().getTime();
+    const currentTime = performance.now();
     const timeOffset = currentTime - lastUpdatedDate;
     const offsetSpeedMultiplier = (1000 / 60) / timeOffset;
     lastUpdatedDate = currentTime;
@@ -277,10 +254,16 @@ function gamelogic() {
     }
 
     updateMotionAndRotation();
-    requestAnimationFrame(gamelogic);
 }
 
+let lastSent = '';
+socket.on('connect', () => { lastSent = ''; }); /* nach (Neu-)Verbindung einmal senden */
+
 function socketemit() {
+    const state = startmowerPositionX + ',' + startmowerPositionY + ',' + mowerRotation;
+    if (state === lastSent) return; /* Mäher steht still -> nichts senden */
+    lastSent = state;
+
     if (cooldown <= 0) {
         for (const key in obstaclePositionen) {
             const [objX, objY] = obstaclePositionen[key];
@@ -290,10 +273,10 @@ function socketemit() {
                 cooldown = 2;
 
                 // Visuelles Feedback (Schaden) bleibt bestehen
-                document.getElementById('score_damage').style.animation = 'none';
-                void document.getElementById('score_damage').offsetWidth;
-                document.getElementById('score_damage').style.animation = null;
-                document.getElementById('score_damage').style.animationPlayState = 'running';
+                scoreDamage.style.animation = 'none';
+                void scoreDamage.offsetWidth;
+                scoreDamage.style.animation = null;
+                scoreDamage.style.animationPlayState = 'running';
             }
         }
     }
@@ -303,16 +286,17 @@ function socketemit() {
 }
 
 function animate() {
+    gamelogic();
     renderFPS++; /* Rendered FPS analysis */
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    ctx.fillStyle = "rgb(88, 114, 36)";
+    ctx.beginPath();
     for (const key in rasenPositionen) {
-        if (Object.hasOwnProperty.call(rasenPositionen, key)) {
-            const element = rasenPositionen[key];
-            ctx.fillStyle = "rgb(88, 114, 36)";
-            ctx.fillRect(element[0], element[1], 10, 10); // x, y, width, height
-        }
+        const element = rasenPositionen[key];
+        ctx.rect(element[0], element[1], 10, 10); // x, y, width, height
     }
+    ctx.fill();
 
     for (const key in flowerPositionen) {
         if (Object.hasOwnProperty.call(flowerPositionen, key)) {
@@ -348,7 +332,7 @@ function animate() {
     ctx.rotate(mowerRotation * Math.PI / 180);
 
     // Das Bild zeichnen (Berücksichtigen Sie die Verschiebung des Ursprungs)
-    ctx.drawImage(mowerImg, -mowerSize / 2, -mowerSize / 2, mowerSize, mowerSize);
+    ctx.drawImage(mowerImgs[mowerColor], -mowerSize / 2, -mowerSize / 2, mowerSize, mowerSize);
 
     // Die Transformationen zurücksetzen
     ctx.rotate(-mowerRotation * Math.PI / 180);
@@ -366,41 +350,7 @@ function animate() {
                 ctx.rotate(serverInfo[key][7] * Math.PI / 180);
 
                 // Das Bild zeichnen (Berücksichtigen Sie die Verschiebung des Ursprungs)
-                let differentMower;
-
-                switch (serverInfo[key][3]) {
-                    case 0:
-                        differentMower = mower1;
-                        break;
-
-                    case 1:
-                        differentMower = mower2;
-                        break;
-
-                    case 2:
-                        differentMower = mower3;
-                        break;
-
-                    case 3:
-                        differentMower = mower4;
-                        break;
-
-                    case 4:
-                        differentMower = mower5;
-                        break;
-
-                    case 5:
-                        differentMower = mower6;
-                        break;
-
-                    case 6:
-                        differentMower = mower0;
-                        break;
-
-                    default:
-                        differentMower = mower1;
-                        break;
-                }
+                const differentMower = mowerImgs[serverInfo[key][3]] || mowerImgs[0];
                 ctx.drawImage(differentMower, -mowerSize / 2, -mowerSize / 2, mowerSize, mowerSize);
 
                 // Die Transformationen zurücksetzen
@@ -416,8 +366,6 @@ function animate() {
 
     requestAnimationFrame(animate);
 }
-
-requestAnimationFrame(gamelogic);
 
 setInterval(() => {
     socketemit();
