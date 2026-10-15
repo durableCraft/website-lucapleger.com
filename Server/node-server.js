@@ -1,435 +1,192 @@
 "use strict";
 
-const express = require('express');
-const http = require('http');
-const hostname = 'lucapleger.com';
-const socketIO = require('socket.io');
 const path = require('path');
-const fs = require("fs");
-const rateLimit = require('express-rate-limit');
+const http = require('http');
+const express = require('express');
+const { Server } = require('socket.io');
 
+/* ---------- HTTP ---------- */
+const PUBLIC = path.join(__dirname, '..', 'public'); // nur öffentliche Dateien liegen hier
 const app = express();
-const serverHTTP = http.createServer(app);
-const io = socketIO(serverHTTP);
+const server = http.createServer(app);
+const io = new Server(server, { maxHttpBufferSize: 1e4 }); // 10 KB statt 1 MB pro Nachricht
 
-// Rate Limiting für API-Endpunkte (z.B. Socket.io)
-const apiLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 Minute
-    max: 3800, // Maximale Anzahl von Anfragen pro Minute
-    message: 'Zu viele Anfragen von dieser IP, bitte versuche es später erneut.'
-});
+app.disable('x-powered-by');
+app.get('/zauberw%C3%BCrfel', (req, res) => res.redirect(301, '/rubikscube'));
+app.use(express.static(PUBLIC, {
+    extensions: ['html'],                       // /about -> about.html, /rubikscube -> rubikscube.html
+    maxAge: '1d',                               // Bilder, Fonts, CSS, JS einen Tag cachen
+    setHeaders(res, file) {
+        if (file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    }
+}));
+app.use((req, res) => res.status(404).sendFile(path.join(PUBLIC, '404.html')));
 
-app.use('/api/', apiLimiter);
+/* ---------- Spielzustand ---------- */
+const W = 1920, H = 1080, MOWER = 100;
+const GRASS = 350, GRASS_MIN = GRASS - 50, FLOWERS = 15, OBSTACLES = 4;
+const MOW_R2 = 40 ** 2, HIT_R2 = 40 ** 2, MAX_STEP = 60;
 
-const currentWorkingDirectory = process.cwd();
+let nextId = 0;
+let grass = {}, flowers = {}, obstacles = {};
+const players = {};          // socket.id -> { id, x, y, rot, color, score, moved, cooldown }
+const changed = new Set();   // Spieler, die sich seit dem letzten Senden geändert haben
+const usedIds = new Set();   // vergebene Spieler-IDs
+const names = new Map();     // Spieler-ID -> Anzeigename
+const NAME_MAX = 16;
+let added = { grass: {}, flowers: {} };
+let removed = { grass: [], flowers: [] };
 
-// Definiere den Pfad zum Ordner mit statischen Dateien (z. B. Bilder)
-const staticFolderPath = path.join(currentWorkingDirectory, 'static');
+const rnd = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+const log = (msg) => console.log(new Date().toLocaleString('de-DE') + ' - ' + msg);
 
-// Statische Dateien bedienen
-app.use('/static', express.static(staticFolderPath));
-
-app.get('/', (req, res) => {
-    // Lies den Inhalt der HTML-Datei und sende sie als Antwort
-    const indexPath = path.join(currentWorkingDirectory, '..', 'index.html');
-    res.sendFile(indexPath);
-});
-
-/* Projects Directory send file + css + js */
-app.get('/projects', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'projects.html');
-    res.sendFile(indexPath);
-});
-app.get('/style/projects.css', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'style', 'projects.css');
-    res.sendFile(indexPath);
-});
-app.get('/script/projects.js', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'script', 'projects.js');
-    res.sendFile(indexPath);
-});
-
-/* About Directory send file + css + js */
-app.get('/about', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'about.html');
-    res.sendFile(indexPath);
-});
-app.get('/style/about.css', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'style', 'about.css');
-    res.sendFile(indexPath);
-});
-app.get('/script/about.js', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'script', 'about.js');
-    res.sendFile(indexPath);
-});
-
-/* Index Direktory send files */
-app.get('/images/mower.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'mower.png');
-    res.sendFile(indexPath);
-});
-app.get('/images/mower_2.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'mower_2.png');
-    res.sendFile(indexPath);
-});
-app.get('/images/mower_3.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'mower_3.png');
-    res.sendFile(indexPath);
-});
-app.get('/images/mower_4.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'mower_4.png');
-    res.sendFile(indexPath);
-});
-app.get('/images/mower_5.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'mower_5.png');
-    res.sendFile(indexPath);
-});
-app.get('/images/mower_6.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'mower_6.png');
-    res.sendFile(indexPath);
-});
-app.get('/images/mower_0.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'mower_0.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/fence.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'fence.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/btn_bg.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'btn_bg.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/lucalogo.svg', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'lucalogo.svg');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/flower.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'flower.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/peg.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'peg.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/rock.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'rock.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/script/socket.io.js', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'script', 'socket.io.js');
-    res.sendFile(indexPath);
-});
-
-app.get('/script/client.js', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'script', 'client.js');
-    res.sendFile(indexPath);
-});
-
-app.get('/style/main.css', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'style', 'main.css');
-    res.sendFile(indexPath);
-});
-
-app.get('/assets/Silkscreen/Silkscreen-Regular.ttf', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'assets', 'Silkscreen', 'Silkscreen-Regular.ttf');
-    res.sendFile(indexPath);
-});
-
-app.get('/assets/Silkscreen/Silkscreen-Bold.ttf', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'assets', 'Silkscreen', 'Silkscreen-Bold.ttf');
-    res.sendFile(indexPath);
-});
-
-app.get('/sitemap.xml', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'assets', 'sitemap.xml');
-    res.sendFile(indexPath);
-});
-
-/* Rubiks Seite */
-app.get('/rubikscube', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'rubikscube.html');
-    res.sendFile(indexPath);
-});
-
-app.get('/zauberw%C3%BCrfel', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'rubikscube.html');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/cube_orientation.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'cube_orientation.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/style/rubiks.css', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'style', 'rubiks.css');
-    res.sendFile(indexPath);
-});
-
-app.get('/script/rubiks.js', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'script', 'rubiks.js');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/rubik_images/R_inv.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'rubik_images', 'R_inv.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/rubik_images/D_inv.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'rubik_images', 'D_inv.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/rubik_images/D.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'rubik_images', 'D.png');
-    res.sendFile(indexPath);
-});
-
-app.get('/images/rubik_images/R.png', (req, res) => {
-    const indexPath = path.join(currentWorkingDirectory, '..', 'images', 'rubik_images', 'R.png');
-    res.sendFile(indexPath);
-});
-
-/* 404 Seite bei ungültigem Pfad. */
-app.use((req, res, next) => {
-    res.status(404).sendFile(path.join(currentWorkingDirectory, '..', '404.html'));
-});
-
-const rasenPartikelAnzahl = 350;
-const flowerAnzahl = 15;
-const obstacleAnzahl = 4;
-let rasenPositionen = {};
-let flowerPositionen = {};
-let obstaclePositionen = {};
-
-function getRandomInteger(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+/* Kurze 8-stellige Spieler-ID statt der 20 Zeichen langen Socket-ID */
+function newPlayerId() {
+    let id;
+    do { id = rnd(10000000, 99999999); } while (usedIds.has(id));
+    usedIds.add(id);
+    return id;
 }
 
-function initialRasenFlaeche(amount) {
-    for (let index = 0; index < amount; index++) {
-        const RandPosX = getRandomInteger(22, 1898);
-        const RandPosY = getRandomInteger(22, 1058);
+/* Anzeigename prüfen: nur Text, keine Steuerzeichen, max. 16 Zeichen */
+const cleanName = (name) => typeof name === 'string'
+    ? name.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX)
+    : '';
 
-        rasenPositionen[RandPosX + RandPosY] = [RandPosX, RandPosY];
+/* Ein Spieler im Paket: [id, x, y, rot, farbe, score, age]
+   age = wie viele ms die Position schon alt ist (für die Interpolation beim Client) */
+const packPlayer = (p, now) => [p.id, p.x, p.y, p.rot, p.color, p.score, Math.min(now - p.moved, 999)];
+
+function spawn(target, amount, diff, withType = false) {
+    for (let i = 0; i < amount; i++) {
+        const item = [rnd(22, W - 22), rnd(22, H - 22)];
+        if (withType) item.push(rnd(0, 1));
+        const id = nextId++;                    // eindeutige ID statt x+y (keine Kollisionen)
+        target[id] = item;
+        if (diff) diff[id] = item;
     }
 }
-initialRasenFlaeche(rasenPartikelAnzahl);
 
-function initialFlowerFlache(amount) {
-    for (let index = 0; index < amount; index++) {
-        const RandPosX = getRandomInteger(22, 1898);
-        const RandPosY = getRandomInteger(22, 1058);
-
-        flowerPositionen[RandPosX + RandPosY] = [RandPosX, RandPosY];
-    }
+function resetField() {
+    grass = {}; flowers = {}; obstacles = {};
+    spawn(grass, GRASS);
+    spawn(flowers, FLOWERS);
+    spawn(obstacles, OBSTACLES, null, true);
 }
-initialFlowerFlache(obstacleAnzahl);
+resetField();
 
-function initialObstacleFlache(amount) {
-    for (let index = 0; index < amount; index++) {
-        const RandPosX = getRandomInteger(22, 1898);
-        const RandPosY = getRandomInteger(22, 1058);
-        const type = getRandomInteger(0, 1);
+function mow(sid, p) {
+    const cx = p.x + MOWER / 2, cy = p.y + MOWER / 2;
+    const near = ([x, y], r2) => (x - cx) ** 2 + (y - cy) ** 2 <= r2;
+    const scoreBefore = p.score;
 
-        obstaclePositionen[RandPosX + RandPosY] = [RandPosX, RandPosY, type];
-    }
-}
-initialObstacleFlache(obstacleAnzahl);
+    for (const k in grass) if (near(grass[k], MOW_R2)) { delete grass[k]; p.score += 1; removed.grass.push(k); }
+    for (const k in flowers) if (near(flowers[k], MOW_R2)) { delete flowers[k]; p.score += 2; removed.flowers.push(k); }
 
-let serverInfo = {};
-let playerCooldowns = {};
-const fps = 30;
-let tempDelRasen = [];
-let tempDelFlower = [];
-
-function gamelogic(x, y, radius, socketIdent) {
-    for (const key in rasenPositionen) {
-        const [objX, objY] = rasenPositionen[key];
-        const abstand = Math.sqrt(Math.pow(objX - x, 2) + Math.pow(objY - y, 2));
-
-        if (abstand <= radius) {
-            delete rasenPositionen[key];
-            serverInfo[socketIdent][4] += 1; /* Score +1 */
-            tempDelRasen.push(key);
-        }
-    }
-
-    /* 2. Blumen entfernen */
-    for (const key in flowerPositionen) {
-        const [objX, objY] = flowerPositionen[key];
-        const abstand = Math.sqrt(Math.pow(objX - x, 2) + Math.pow(objY - y, 2));
-
-        if (abstand <= radius) {
-            delete flowerPositionen[key];
-            serverInfo[socketIdent][4] += 2; /* Score +2 */
-            tempDelFlower.push(key);
-        }
-    }
-
-    /* 3. Hindernisse (Steine) prüfen */
     const now = Date.now();
-    // Prüfen, ob der Spieler existiert und ob sein Cooldown abgelaufen ist
-    if (!playerCooldowns[socketIdent] || now > playerCooldowns[socketIdent]) {
-        for (const key in obstaclePositionen) {
-            const [objX, objY] = obstaclePositionen[key];
-            // Radius 40 entspricht der Logik aus dem Client
-            const abstand = Math.sqrt(Math.pow(objX - x, 2) + Math.pow(objY - y, 2));
-
-            if (abstand <= 40) {
-                // Score abziehen, aber nicht unter 0 gehen
-                serverInfo[socketIdent][4] = Math.max(serverInfo[socketIdent][4] - 10, 0);
-
-                // 2 Sekunden (2000ms) Cooldown setzen
-                playerCooldowns[socketIdent] = now + 2000;
-
-                break;
-            }
+    if (p.cooldown < now) {
+        for (const k in obstacles) {
+            if (near(obstacles[k], HIT_R2)) { p.score = Math.max(p.score - 10, 0); p.cooldown = now + 2000; break; }
         }
     }
+    if (p.score !== scoreBefore) changed.add(sid);
 }
 
-setInterval(() => {
-    //Sende eine Variable an den Client
-    io.emit('serverInfo', serverInfo);
+/* ---------- Globale Timer: genau EINMAL, unabhängig von der Spielerzahl ---------- */
+setInterval(() => {                             // ~16 Hz: Änderungen senden (nur wenn sich etwas bewegt)
+    if (removed.grass.length) io.emit('RemoveRasenPartikel', removed.grass);
+    if (removed.flowers.length) io.emit('RemoveFlowers', removed.flowers);
+    removed = { grass: [], flowers: [] };
 
-    for (const key in serverInfo) {
-        if (Object.hasOwnProperty.call(serverInfo, key)) {
-            const element = serverInfo[key];
-
-            element[5] = element[0];
-            element[6] = element[1];
-            element[7] = element[2];
-        }
+    if (changed.size) {                         // nur die Spieler, die sich geändert haben
+        const now = Date.now();
+        const list = [];
+        for (const sid of changed) if (players[sid]) list.push(packPlayer(players[sid], now));
+        changed.clear();
+        if (list.length) io.emit('players', list, now); // now = Serverzeit für die Interpolation
     }
-}, 120);
+}, 60);
 
+setInterval(() => {                             // 1 Hz: Rasen/Blumen nachwachsen lassen
+    const g = GRASS_MIN - Object.keys(grass).length;
+    const f = FLOWERS - Object.keys(flowers).length;
+    if (g > 0) spawn(grass, g, added.grass);
+    if (f > 0) spawn(flowers, f, added.flowers);
+    if (g > 0) io.emit('AddRasenPartikel', added.grass);
+    if (f > 0) io.emit('AddFlower', added.flowers);
+    added = { grass: {}, flowers: {} };
+}, 1000);
+
+setInterval(() => {                             // Vollabgleich alle 15 s
+    io.emit('rasenPartikel', grass);
+    io.emit('flowers', flowers);
+}, 15000);
+
+/* ---------- Verbindungen ---------- */
 io.on('connection', (socket) => {
-    socket.emit('clientID', socket.id);
+    const pid = newPlayerId();
+    log(pid + ' has joined!');
+    let lastMsg = 0;
+    let lastNameChange = 0;
+
+    const now = Date.now();
+    socket.emit('clientID', pid);
+    socket.emit('players', Object.values(players).map(p => packPlayer(p, now)), now); // alle bisherigen Spieler
+    socket.emit('rasenPartikel', grass);
+    socket.emit('flowers', flowers);
+    socket.emit('obstacles', obstacles);
+    socket.emit('names', [...names]);           // Namen aller bisherigen Spieler
+
+    socket.on('setName', (name) => {
+        const now = Date.now();
+        if (now - lastNameChange < 1000) return; // max. 1 Namensänderung pro Sekunde
+        lastNameChange = now;
+
+        name = cleanName(name);
+        if (!name || names.get(pid) === name) return;
+        names.set(pid, name);
+        io.emit('names', [[pid, name]]);        // nur bei Änderung, nicht in jedem Positions-Paket
+    });
+
+    socket.on('clientInfo', (data) => {
+        const now = Date.now();
+        if (now - lastMsg < 20) return;         // max. ~50 Nachrichten/s pro Client
+        lastMsg = now;
+
+        if (!Array.isArray(data)) return;       // ungültige Daten ignorieren statt abzustürzen
+        const [x, y, rot, color] = data;
+        if (![x, y, rot].every(Number.isFinite)) return;
+
+        let p = players[socket.id];
+        if (!p) {
+            const c = Number.isInteger(color) && color >= 0 && color <= 6 ? color : 0;
+            p = players[socket.id] = { id: pid, x: Math.round(x), y: Math.round(y), rot: 0, color: c, score: 0, moved: now, cooldown: 0 }; // Score beginnt IMMER bei 0
+            changed.add(socket.id);
+        }
+        // Max. Schrittweite pro Nachricht -> kein Teleportieren
+        const nx = Math.round(clamp(clamp(x, p.x - MAX_STEP, p.x + MAX_STEP), 0, W - MOWER));
+        const ny = Math.round(clamp(clamp(y, p.y - MAX_STEP, p.y + MAX_STEP), 0, H - MOWER));
+        const nr = Math.round(((rot % 360) + 360) % 360);
+        if (nx !== p.x || ny !== p.y || nr !== p.rot) {
+            p.x = nx; p.y = ny; p.rot = nr;
+            p.moved = now;
+            changed.add(socket.id);
+        }
+
+        mow(socket.id, p);
+    });
 
     socket.on('disconnect', () => {
-        delete serverInfo[socket.id];
-        delete playerCooldowns[socket.id];
-
-        const currentDate = new Date();
-        const formatedDate = currentDate.getDate() + '.' + (currentDate.getMonth() + 1) + '.' + currentDate.getFullYear() + ' ' + currentDate.getHours() + ':' + currentDate.getMinutes() + ':' + currentDate.getSeconds() + ' - ';
-        console.log(formatedDate + socket.id + ' has left!');
-
-        if (Object.keys(serverInfo).length < 1) {
-            /* Erstelle neue Rasenfläche wenn niemand mehr da. */
-            rasenPositionen = {};
-            initialRasenFlaeche(rasenPartikelAnzahl);
-            flowerPositionen = {};
-            initialFlowerFlache(flowerAnzahl);
-            obstaclePositionen = {};
-            initialObstacleFlache(obstacleAnzahl);
-        }
+        delete players[socket.id];
+        changed.delete(socket.id);
+        usedIds.delete(pid);
+        names.delete(pid);
+        io.emit('playerLeft', pid);
+        log(pid + ' has left!');
+        if (Object.keys(players).length === 0) resetField();
     });
-
-    //Empfange eine Variable vom Client
-    socket.on('clientInfo', (data) => {
-        if (!serverInfo[socket.id]) {
-            // Initialisierung: Beim ersten Mal nehmen wir die Daten an (meistens 0)
-            serverInfo[socket.id] = [data[0], data[1], data[2], data[3], data[4]];
-        } else {
-            // Update: Nur Position und Rotation vom Client übernehmen
-            serverInfo[socket.id][0] = data[0];
-            serverInfo[socket.id][1] = data[1];
-            serverInfo[socket.id][2] = data[2];
-            serverInfo[socket.id][3] = data[3];
-        }
-
-        gamelogic(data[0] + 50, data[1] + 50, 40, socket.id);
-    });
-
-    socket.emit('serverInfo', serverInfo);
-
-    /* Rasenpartikel etc senden */
-    socket.emit('rasenPartikel', rasenPositionen);
-    socket.emit('flowers', flowerPositionen);
-    socket.emit('obstacles', obstaclePositionen);
-    setInterval(() => {
-        socket.emit('rasenPartikel', rasenPositionen);
-        socket.emit('flowers', flowerPositionen);
-    }, 15000); /* Alle 15 Sekunden wird das Absolute Objekt übertragen um Fehler zu beheben. */
-
-    let tempAddRasen = {};
-    let tempAddFlower = {};
-
-    function AddRasenFlaeche(amount) {
-        for (let index = 0; index < amount; index++) {
-            const RandPosX = getRandomInteger(22, 1898);
-            const RandPosY = getRandomInteger(22, 1058);
-
-            rasenPositionen[RandPosX + RandPosY] = [RandPosX, RandPosY];
-            tempAddRasen[RandPosX + RandPosY] = [RandPosX, RandPosY];
-        }
-    }
-
-    function AddFlowerFlache(amount) {
-        for (let index = 0; index < amount; index++) {
-            const RandPosX = getRandomInteger(22, 1898);
-            const RandPosY = getRandomInteger(22, 1058);
-
-            flowerPositionen[RandPosX + RandPosY] = [RandPosX, RandPosY];
-            tempAddFlower[RandPosX + RandPosY] = [RandPosX, RandPosY];
-        }
-    }
-
-    /* Rasenpartikel / Flowers hinzufügen oder entfernen */
-    setInterval(() => {
-        if (Object.keys(rasenPositionen).length < (rasenPartikelAnzahl - 50)) {
-            const menge = (rasenPartikelAnzahl - 50) - Object.keys(rasenPositionen).length;
-            AddRasenFlaeche(menge);
-
-            if (tempAddRasen != {}) {
-                io.emit('AddRasenPartikel', tempAddRasen);
-                tempAddRasen = {};
-            }
-        }
-    }, 500);
-
-    setInterval(() => {
-        if (Object.keys(flowerPositionen).length < flowerAnzahl) {
-            const menge = flowerAnzahl - Object.keys(flowerPositionen).length;
-            AddFlowerFlache(menge);
-
-            if (tempAddFlower != {}) {
-                io.emit('AddFlower', tempAddFlower);
-                tempAddFlower = {};
-            }
-        }
-    }, 2000);
-
-    setInterval(() => {
-        if (tempDelRasen != []) {
-            io.emit('RemoveRasenPartikel', tempDelRasen);
-            tempDelRasen = [];
-        }
-        if (tempDelFlower != []) {
-            io.emit('RemoveFlowers', tempDelFlower);
-            tempDelFlower = [];
-        }
-    }, 250);
-
-    /* Joining Message: */
-    function consoleJoinLog() {
-        const currentDate = new Date();
-        const formatedDate = currentDate.getDate() + '.' + (currentDate.getMonth() + 1) + '.' + currentDate.getFullYear() + ' ' + currentDate.getHours() + ':' + currentDate.getMinutes() + ':' + currentDate.getSeconds() + ' - ';
-        console.log(formatedDate + socket.id + ' has joined!');
-    }
-    consoleJoinLog();
 });
 
-serverHTTP.listen(80, () => {
-    console.log('Server läuft auf Port 80');
-});
+const PORT = process.env.PORT || 80;
+server.listen(PORT, () => log('Server läuft auf Port ' + PORT));

@@ -1,15 +1,11 @@
 {
   "dependencies": {
     "express": "^4.18.2",
-    "express-rate-limit": "^7.1.5",
-    "fs": "^0.0.1-security",
-    "https": "^1.0.0",
-    "path": "^0.12.7",
     "socket.io": "^4.7.4"
   },
   "name": "server",
   "version": "1.0.0",
-  "main": "node_server.js",
+  "main": "node-server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
