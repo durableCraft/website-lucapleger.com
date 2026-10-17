@@ -77,6 +77,60 @@ function resetField() {
 }
 resetField();
 
+/* ---------- Spielrunden ----------
+   waiting   -> weniger als 2 Mäher, freies Spielen
+   countdown -> 10 s bis zum Start
+   running   -> 2 min Runde, Scores starten bei 0
+   ended     -> Ergebnis wird angezeigt, danach nächster Countdown */
+const MIN_PLAYERS = 2;
+const COUNTDOWN_MS = (Number(process.env.COUNTDOWN_SECONDS) || 10) * 1000; // zum Testen per Umgebungsvariable kürzbar
+const ROUND_MS = (Number(process.env.ROUND_SECONDS) || 120) * 1000;
+const RESULT_MS = 8000;
+const round = { phase: 'waiting', endsAt: 0, timer: null };
+
+const playerCount = () => Object.keys(players).length;
+const roundInfo = () => [round.phase, round.endsAt ? Math.max(round.endsAt - Date.now(), 0) : 0]; // [Phase, verbleibende ms]
+
+function setPhase(phase, duration = 0, next = null) {
+    clearTimeout(round.timer);
+    round.phase = phase;
+    round.endsAt = duration ? Date.now() + duration : 0;
+    round.timer = duration ? setTimeout(next, duration) : null;
+    io.emit('round', roundInfo());
+}
+
+/* Nach jedem Beitreten/Verlassen prüfen, ob eine Runde starten oder abbrechen muss */
+function checkRound() {
+    const enough = playerCount() >= MIN_PLAYERS;
+    if (round.phase === 'waiting' && enough) setPhase('countdown', COUNTDOWN_MS, startRound);
+    else if ((round.phase === 'countdown' || round.phase === 'running') && !enough) {
+        log('Runde abgebrochen: zu wenige Spieler');
+        setPhase('waiting');
+    }
+}
+
+function startRound() {
+    for (const sid in players) {                // alle Scores auf 0
+        players[sid].score = 0;
+        changed.add(sid);
+    }
+    log('Runde gestartet mit ' + playerCount() + ' Spielern');
+    setPhase('running', ROUND_MS, endRound);
+}
+
+function endRound() {
+    const ranking = Object.values(players)
+        .map(p => [p.id, names.get(p.id) || 'Unbekannt', p.score])
+        .sort((a, b) => b[2] - a[2]);           // [[id, name, score], ...] bester zuerst
+    io.emit('roundEnd', ranking);
+    log('Runde beendet, Gewinner: ' + (ranking[0] ? ranking[0][1] + ' (' + ranking[0][2] + ')' : '-'));
+
+    setPhase('ended', RESULT_MS, () => {        // nach der Anzeige: nächste Runde oder warten
+        if (playerCount() >= MIN_PLAYERS) setPhase('countdown', COUNTDOWN_MS, startRound);
+        else setPhase('waiting');
+    });
+}
+
 function mow(sid, p) {
     const cx = p.x + MOWER / 2, cy = p.y + MOWER / 2;
     const near = ([x, y], r2) => (x - cx) ** 2 + (y - cy) ** 2 <= r2;
@@ -138,6 +192,7 @@ io.on('connection', (socket) => {
     socket.emit('flowers', flowers);
     socket.emit('obstacles', obstacles);
     socket.emit('names', [...names]);           // Namen aller bisherigen Spieler
+    socket.emit('round', roundInfo());          // aktuelle Rundenphase
 
     socket.on('setName', (name) => {
         const now = Date.now();
@@ -164,6 +219,7 @@ io.on('connection', (socket) => {
             const c = Number.isInteger(color) && color >= 0 && color <= 6 ? color : 0;
             p = players[socket.id] = { id: pid, x: Math.round(x), y: Math.round(y), rot: 0, color: c, score: 0, moved: now, cooldown: 0 }; // Score beginnt IMMER bei 0
             changed.add(socket.id);
+            checkRound();                       // evtl. startet jetzt der Countdown
         }
         // Max. Schrittweite pro Nachricht -> kein Teleportieren
         const nx = Math.round(clamp(clamp(x, p.x - MAX_STEP, p.x + MAX_STEP), 0, W - MOWER));
@@ -186,6 +242,7 @@ io.on('connection', (socket) => {
         io.emit('playerLeft', pid);
         log(pid + ' has left!');
         if (Object.keys(players).length === 0) resetField();
+        checkRound();                           // evtl. Runde abbrechen
     });
 });
 

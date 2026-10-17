@@ -504,3 +504,58 @@ footer #footer_overflow {
     user-select: text;
     -webkit-user-select: text;
 }
+
+/* ---------- Spielrunden ---------- */
+#round_banner,
+#round_timer {
+    position: fixed;
+    left: 50%;
+    z-index: 2000;
+    pointer-events: none;           /* blockiert keine Klicks und keinen Joystick */
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.45);
+    text-align: center;
+    opacity: 0;
+    transition: opacity 300ms;
+}
+
+#round_banner {
+    top: 28%;
+    transform: translate(-50%, -50%);
+    padding: 16px 24px;
+    width: max-content;
+    max-width: calc(100vw - 32px);  /* auf dem Handy umbrechen statt abschneiden */
+    font-size: 18px;
+    line-height: 1.6;
+}
+
+#round_banner .banner_title { font-size: 32px; margin-bottom: 6px; }
+
+#round_timer {
+    top: 32px;
+    transform: translateX(-50%);
+    padding: 6px 12px;
+    font-size: 18px;
+}
+
+#round_banner.visible,
+#round_timer.visible { opacity: 1; }
+
+#round_timer.urgent { color: rgb(255, 74, 74); }   /* letzte 10 Sekunden rot */
+
+/* Handy: kleinere Schrift */
+@media (max-width: 600px), (max-height: 500px) {
+    #round_banner { padding: 10px 16px; font-size: 14px; }
+    #round_banner .banner_title { font-size: 22px; margin-bottom: 4px; }
+    #round_timer { font-size: 14px; }
+}
+
+/* Hochformat: Timer unter den Score (in der Mitte steht der Willkommenstext) */
+@media (max-width: 600px) {
+    #round_timer { top: 76px; left: auto; right: 32px; transform: none; }
+}
+
+/* Querformat: Banner direkt unter den Timer */
+@media (max-height: 500px) {
+    #round_banner { top: 76px; transform: translateX(-50%); }
+}

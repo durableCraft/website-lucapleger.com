@@ -157,6 +157,69 @@ socket.on('names', (list) => {
     for (const [id, name] of list) playerNames.set(id, name);
 });
 
+/* ---------- Spielrunden ---------- */
+const roundTimer = document.getElementById('round_timer');
+const roundBanner = document.getElementById('round_banner');
+let roundPhase = 'waiting';
+let roundEndsAt = 0;          // lokale Zeit (performance.now), zu der die aktuelle Phase endet
+let bannerTimeout = null;
+
+/* Banner in der Bildschirmmitte: erste Zeile groß, weitere Zeilen klein.
+   textContent statt innerHTML, weil Spielernamen von Nutzern kommen. */
+function showBanner(lines, duration) {
+    roundBanner.replaceChildren(...lines.map((text, i) => {
+        const p = document.createElement('p');
+        p.textContent = text;
+        if (i === 0) p.className = 'banner_title';
+        return p;
+    }));
+    roundBanner.classList.add('visible');
+    clearTimeout(bannerTimeout);
+    if (duration) bannerTimeout = setTimeout(() => roundBanner.classList.remove('visible'), duration);
+}
+
+socket.on('round', ([phase, msLeft]) => {
+    const previous = roundPhase;
+    roundPhase = phase;
+    roundEndsAt = performance.now() + msLeft;
+
+    if (phase === 'running') showBanner(['Los!'], 1500);
+    if (phase === 'waiting' && previous === 'countdown') showBanner(['Start abgebrochen', 'Warte auf Mitspieler'], 3000);
+    if (phase === 'waiting' && previous === 'running') showBanner(['Runde abgebrochen', 'Zu wenige Mäher'], 3000);
+    updateRoundDisplay();
+});
+
+socket.on('roundEnd', (ranking) => {
+    const best = ranking.length ? ranking[0][2] : 0;
+    const winners = ranking.filter(([, , s]) => s === best);
+    let title;
+    if (best === 0) title = 'Niemand hat gemäht';
+    else if (winners.length > 1) title = 'Unentschieden!';
+    else if (winners[0][0] === clientID) title = 'Du hast gewonnen!';
+    else title = winners[0][1] + ' gewinnt!';
+
+    const lines = [title];
+    ranking.forEach(([id, name, s], i) => {     // Top 3 und immer der eigene Platz
+        if (i < 3 || id === clientID) lines.push((i + 1) + '. ' + (id === clientID ? 'Du' : name) + ' – ' + s);
+    });
+    showBanner(lines, 7000);
+});
+
+/* Countdown und Rundentimer aus der lokalen Endzeit berechnen (4× pro Sekunde) */
+function updateRoundDisplay() {
+    const secondsLeft = Math.ceil(Math.max(roundEndsAt - performance.now(), 0) / 1000);
+
+    if (roundPhase === 'countdown') {
+        showBanner(['Spiel startet in ' + secondsLeft]);
+    }
+    if (roundPhase === 'running') {
+        roundTimer.textContent = Math.floor(secondsLeft / 60) + ':' + String(secondsLeft % 60).padStart(2, '0');
+        roundTimer.classList.toggle('urgent', secondsLeft <= 10);
+    }
+    roundTimer.classList.toggle('visible', roundPhase === 'running');
+}
+setInterval(updateRoundDisplay, 250);
+
 /* Position und Größe eines Namensschilds über einem Mäher (in Canvas-Koordinaten) */
 const tagWidths = new Map();               // Name -> Breite, damit nicht jedes Frame neu gemessen wird
 let tagFontReady = !document.fonts || document.fonts.check(TAG_FONT);
@@ -587,9 +650,14 @@ function disableMain() {
     document.getElementById("nav_select").style.display = 'none';
 }
 
-function enableMain() {
+/* Nur einblenden – ohne mobileResizeFeature(), sonst rufen sich beide endlos gegenseitig auf */
+function showMain() {
     document.getElementById('main_overlay').style.opacity = 1;
     document.getElementById('fullscreen_btn').textContent = '+';
+}
+
+function enableMain() {
+    showMain();
     mobileResizeFeature();
 }
 
@@ -630,7 +698,7 @@ function mobileResizeFeature() {
         enableWelcomeMobile();
 
         if (isTouch) {
-            enableMain();
+            showMain();
 
             setTimeout(() => {
                 if (window.innerWidth < 435 && window.innerHeight > 435 && dismissedRotationInfo === false) {
@@ -644,7 +712,7 @@ function mobileResizeFeature() {
     } else {
         document.getElementById("disableonmobile").style.display = 'block';
         document.getElementById("nav_select").style.display = 'none';
-        enableMain();
+        showMain();
         disableWelcomeMobile();
     }
 }
