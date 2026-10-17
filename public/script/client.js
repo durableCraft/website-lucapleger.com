@@ -691,7 +691,7 @@ window.addEventListener('touchstart', function (event) {
     const touch = event.touches[0];
 
     // Auf Links, Buttons, Eingabefeld, Steuerleiste und Firefox-Hinweis: kein Joystick
-    if (event.target.closest('a, button, input, footer, #warning')) return;
+    if (event.target.closest('a, button, input, footer, #warning, #horizontal_notification, #horizontal_notification_text')) return;
 
     // Auf dem eigenen Namensschild: Namen bearbeiten statt Joystick
     if (!editingName && isOnOwnTag(touch.clientX, touch.clientY)) {
@@ -733,6 +733,10 @@ window.addEventListener('touchmove', function (event) {
 
         joystick.style.transform = 'translate(' + posX + 'px, ' + posY + 'px)';
     }
+});
+
+document.getElementById("horizontal_notification").addEventListener('touchstart', function () {
+    document.getElementById('horizontal_notification').style.opacity = 0;
 });
 
 window.addEventListener('touchcancel', touchend);

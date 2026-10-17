@@ -344,6 +344,7 @@ footer #footer_overflow {
     max-width: 180px;
     top: 0;
     left: 0;
+    z-index: 999;
 
     margin: 40px;
 
@@ -351,6 +352,8 @@ footer #footer_overflow {
     flex-wrap: wrap;
     justify-content: left;
     align-content: center;
+
+    transition-duration: 300ms;
 }
 
 #horizontal_notification_text {
