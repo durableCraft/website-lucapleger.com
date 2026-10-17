@@ -584,11 +584,13 @@ function disableMain() {
     document.getElementById('fullscreen_btn').textContent = '-';
     document.getElementById('horizontal_notification').style.opacity = 0;
     document.getElementById('horizontal_notification').style.zIndex = 999;
+    document.getElementById("nav_select").style.display = 'none';
 }
 
 function enableMain() {
     document.getElementById('main_overlay').style.opacity = 1;
     document.getElementById('fullscreen_btn').textContent = '+';
+    mobileResizeFeature();
 }
 
 /* Opacity 0 / 1 for Main when pressed Fullscreen button */
