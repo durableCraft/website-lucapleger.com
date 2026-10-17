@@ -630,7 +630,15 @@ function mobileResizeFeature() {
 const joystickContainer = document.getElementById('joystick-container');
 const joystick = document.getElementById('joystick');
 
+let joystickActive = false;  // Joystick nur aktiv, wenn die Berührung auf der Spielfläche begonnen hat
+let nameTagTouched = false;  // Berührung hat auf dem eigenen Namensschild begonnen
+
 function touchend() {
+    if (nameTagTouched) {
+        nameTagTouched = false;
+        openNameEditor();    // direkt hier öffnen, damit iOS die Tastatur zeigt
+    }
+    joystickActive = false;
     emulateKeyUpAll();
     joystickContainer.style.display = 'none';
     joystick.style.transform = 'translate(0, 0)';
@@ -680,11 +688,21 @@ function getDirection(x, y) {
 }
 
 window.addEventListener('touchstart', function (event) {
-    if (event.target === nameInput) return; // beim Antippen des Namensfelds keinen Joystick zeigen
-    let touch = event.touches[0];
+    const touch = event.touches[0];
+
+    // Auf Links, Buttons, Eingabefeld, Steuerleiste und Firefox-Hinweis: kein Joystick
+    if (event.target.closest('a, button, input, footer, #warning')) return;
+
+    // Auf dem eigenen Namensschild: Namen bearbeiten statt Joystick
+    if (!editingName && isOnOwnTag(touch.clientX, touch.clientY)) {
+        nameTagTouched = true;
+        return;
+    }
+
     const posX = touch.clientX - 40;
     const posY = touch.clientY - 40;
 
+    joystickActive = true;
     joystickContainer.style.display = 'flex';
 
     joystickContainer.style.top = posY + 'px';
@@ -692,7 +710,8 @@ window.addEventListener('touchstart', function (event) {
 });
 
 window.addEventListener('touchmove', function (event) {
-    if (joystickContainer.style.display !== 'none') {
+    nameTagTouched = false;  // Wischen ist kein Antippen
+    if (joystickActive) {
         let touch = event.touches[0];
         let posX = touch.clientX - 40 - joystickContainer.offsetLeft;
         let posY = touch.clientY - 40 - joystickContainer.offsetTop;
