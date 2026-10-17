@@ -22,7 +22,14 @@
 
     <p id="dev_anzeige" style="display: none;"></p>
 
-    <div id="horizontal_notification" style="opacity: 0;"><p id="horizontal_notification_text">Noch besser: Gerät ins Querformat drehen.&nbsp;</p><div id="notification_rotate">&#x1F4F1;</div></div>
+    <div id="horizontal_notification" style="opacity: 0; z-index: 9999;"><p id="horizontal_notification_text">Noch besser: Gerät ins Querformat drehen.&nbsp;</p><div id="notification_rotate">&#x1F4F1;</div></div>
+
+    <select name="nav_select" id="nav_select" style="display: none;">
+        <option value="https://lucapleger.com">Home</option>
+        <option value="/projects">Projekte</option>
+        <option value="/about">Über Luca</option>
+        <option value="https://github.com/durableCraft">GitHub</option>
+    </select>
 
     <main id="main_overlay" style="opacity: 1;">
         <div id="mobile_info" style="opacity: 0;">

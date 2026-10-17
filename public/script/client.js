@@ -583,6 +583,7 @@ function disableMain() {
     document.getElementById('main_overlay').style.opacity = 0;
     document.getElementById('fullscreen_btn').textContent = '-';
     document.getElementById('horizontal_notification').style.opacity = 0;
+    document.getElementById('horizontal_notification').style.zIndex = 999;
 }
 
 function enableMain() {
@@ -618,9 +619,12 @@ document.getElementById('warning').addEventListener('click', function () {
 function mobileResizeFeature() {
     if (window.innerWidth > 420 && window.innerHeight < 420) {
         document.getElementById("disableonmobile").style.display = 'none';
+        document.getElementById("nav_select").style.display = 'block';
         disableMain();
+        enableWelcomeMobile();
     } else if (window.innerWidth < 435 && window.innerHeight > 435) {
         document.getElementById("disableonmobile").style.display = 'none';
+        document.getElementById("nav_select").style.display = 'block';
         enableWelcomeMobile();
 
         if (isTouch) {
@@ -630,12 +634,14 @@ function mobileResizeFeature() {
                 if (window.innerWidth < 435 && window.innerHeight > 435 && dismissedRotationInfo === false) {
                     console.warn("Gerät im Hochformat! Für bessere sichtbarkeit ins Querformat drehen.")
                     document.getElementById('horizontal_notification').style.opacity = 1;
+                    document.getElementById('horizontal_notification').style.zIndex = 9999;
                     disableWelcomeMobile();
                 }
             }, 3000);
         }
     } else {
         document.getElementById("disableonmobile").style.display = 'block';
+        document.getElementById("nav_select").style.display = 'none';
         enableMain();
         disableWelcomeMobile();
     }
@@ -707,7 +713,7 @@ window.addEventListener('touchstart', function (event) {
     const touch = event.touches[0];
 
     // Auf Links, Buttons, Eingabefeld, Steuerleiste und Firefox-Hinweis: kein Joystick
-    if (event.target.closest('a, button, input, footer, #warning, #horizontal_notification, #horizontal_notification_text')) return;
+    if (event.target.closest('a, button, input, footer, #warning, #horizontal_notification, #horizontal_notification_text, #nav_select')) return;
 
     // Auf dem eigenen Namensschild: Namen bearbeiten statt Joystick
     if (!editingName && isOnOwnTag(touch.clientX, touch.clientY)) {
@@ -751,10 +757,16 @@ window.addEventListener('touchmove', function (event) {
     }
 });
 
-document.getElementById("horizontal_notification").addEventListener('touchstart', function () {
-    document.getElementById('horizontal_notification').style.opacity = 0;
+document.getElementById("horizontal_notification").addEventListener('touchend', function () {
     dismissedRotationInfo = true;
+    document.getElementById('horizontal_notification').style.opacity = 0;
+    document.getElementById('horizontal_notification').style.zIndex = 999;
     enableWelcomeMobile();
+});
+
+document.getElementById('nav_select').addEventListener('change', function () {
+    console.log('Gewählt:', this.value);
+    window.location.href = this.value;
 });
 
 window.addEventListener('touchcancel', touchend);

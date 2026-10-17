@@ -253,7 +253,7 @@ footer #footer_overflow {
 
 .wasd_div {
     height: 80px;
-    min-width: 205px;
+    min-width: 185px;
     padding: 15px;
     padding-right: 0;
     width: fit-content;
@@ -277,7 +277,7 @@ footer #footer_overflow {
 
 .wasd_btn {
     height: 50px;
-    width: 80px;
+    width: 60px;
 
     font-size: 28px;
 
@@ -288,7 +288,7 @@ footer #footer_overflow {
     outline: none;
 
     background: rgb(118, 118, 118);
-    background-image: url('../images/btn_bg.png');
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5' shape-rendering='crispEdges'%3E%3Cpath fill='%23707070' d='M1 0h2v1H1zM6 0h1v1H6zM0 1h1v1H0zM4 1h1v1H4zM3 2h2v1H3zM7 2h1v1H7zM0 3h1v1H0zM4 3h1v1H4zM6 3h1v1H6zM1 4h1v1H1zM7 4h1v1H7z'/%3E%3C/svg%3E");
     background-size: cover;
     image-rendering: pixelated;
 
@@ -323,7 +323,8 @@ footer #footer_overflow {
 
     border: 100px solid outset;
     border-image: url('../images/fence.png') 100 / 100px / 75px round;
-    /* background: rgb(146, 186, 66); */ /* original Color */
+    /* background: rgb(146, 186, 66); */
+    /* original Color */
     background: rgb(142, 189, 49);
     image-rendering: pixelated;
     image-rendering: -webkit-optimize-contrast;
@@ -348,7 +349,6 @@ footer #footer_overflow {
     max-width: 180px;
     top: 0;
     left: 0;
-    z-index: 999;
 
     margin: 40px;
 
@@ -374,11 +374,30 @@ footer #footer_overflow {
 
 #mobile_info {
     font-size: 18px;
+    z-index: 500;
 }
 
 #logoluca_mobile {
     margin-top: 3px;
     margin-left: 2px;
+    z-index: 500;
+}
+
+#nav_select {
+    appearance: none;
+    -webkit-appearance: none;
+
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 9998;
+
+    opacity: 0;
+
+    width: 140px;
+    height: 80px;
+
+    margin: 40px;
 }
 
 #score {
@@ -391,7 +410,7 @@ footer #footer_overflow {
 
     text-align: right;
 
-    font-size: 20px;
+    font-size: 18px;
 }
 
 #score_damage {
@@ -404,7 +423,7 @@ footer #footer_overflow {
 
     text-align: right;
 
-    font-size: 20px;
+    font-size: 18px;
     color: rgb(255, 74, 74);
     opacity: 0;
     transform: translateY(0px);
