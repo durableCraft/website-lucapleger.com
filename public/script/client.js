@@ -160,6 +160,7 @@ socket.on('names', (list) => {
 /* ---------- Spielrunden ---------- */
 const roundTimer = document.getElementById('round_timer');
 const roundBanner = document.getElementById('round_banner');
+const roundRestart = document.getElementById('round_restart');
 let roundPhase = 'waiting';
 let roundEndsAt = 0;          // lokale Zeit (performance.now), zu der die aktuelle Phase endet
 let bannerTimeout = null;
@@ -217,7 +218,13 @@ function updateRoundDisplay() {
         roundTimer.classList.toggle('urgent', secondsLeft <= 10);
     }
     roundTimer.classList.toggle('visible', roundPhase === 'running');
+    roundRestart.classList.toggle('visible', roundPhase === 'ready');
 }
+
+roundRestart.addEventListener('click', () => {
+    roundRestart.classList.remove('visible');   // sofort weg, der Server schickt gleich den Countdown
+    socket.emit('startRound');
+});
 setInterval(updateRoundDisplay, 250);
 
 /* Position und Größe eines Namensschilds über einem Mäher (in Canvas-Koordinaten) */

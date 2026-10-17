@@ -81,12 +81,17 @@ resetField();
    waiting   -> weniger als 2 Mäher, freies Spielen
    countdown -> 10 s bis zum Start
    running   -> 2 min Runde, Scores starten bei 0
-   ended     -> Ergebnis wird angezeigt, danach nächster Countdown */
+   ended     -> Ergebnis wird angezeigt
+   ready     -> nach einer Runde: Button "Neue Runde" statt automatischem Start */
 const MIN_PLAYERS = 2;
 const COUNTDOWN_MS = (Number(process.env.COUNTDOWN_SECONDS) || 10) * 1000; // zum Testen per Umgebungsvariable kürzbar
 const ROUND_MS = (Number(process.env.ROUND_SECONDS) || 120) * 1000;
 const RESULT_MS = 8000;
 const round = { phase: 'waiting', endsAt: 0, timer: null };
+let autoStart = true;   // erste Runde startet automatisch; nach einer Runde nur noch per Button.
+                        // Wird wieder true, wenn alle gegangen sind und ein neues Feld entsteht.
+
+const startCountdown = () => setPhase('countdown', COUNTDOWN_MS, startRound);
 
 const playerCount = () => Object.keys(players).length;
 const roundInfo = () => [round.phase, round.endsAt ? Math.max(round.endsAt - Date.now(), 0) : 0]; // [Phase, verbleibende ms]
@@ -102,8 +107,12 @@ function setPhase(phase, duration = 0, next = null) {
 /* Nach jedem Beitreten/Verlassen prüfen, ob eine Runde starten oder abbrechen muss */
 function checkRound() {
     const enough = playerCount() >= MIN_PLAYERS;
-    if (round.phase === 'waiting' && enough) setPhase('countdown', COUNTDOWN_MS, startRound);
-    else if ((round.phase === 'countdown' || round.phase === 'running') && !enough) {
+    if (round.phase === 'waiting' && enough) {
+        if (autoStart) startCountdown();
+        else setPhase('ready');                 // Button anzeigen statt automatisch starten
+    } else if (round.phase === 'ready' && !enough) {
+        setPhase('waiting');                    // Button weg, wenn nur noch einer da ist
+    } else if ((round.phase === 'countdown' || round.phase === 'running') && !enough) {
         log('Runde abgebrochen: zu wenige Spieler');
         setPhase('waiting');
     }
@@ -125,9 +134,9 @@ function endRound() {
     io.emit('roundEnd', ranking);
     log('Runde beendet, Gewinner: ' + (ranking[0] ? ranking[0][1] + ' (' + ranking[0][2] + ')' : '-'));
 
-    setPhase('ended', RESULT_MS, () => {        // nach der Anzeige: nächste Runde oder warten
-        if (playerCount() >= MIN_PLAYERS) setPhase('countdown', COUNTDOWN_MS, startRound);
-        else setPhase('waiting');
+    autoStart = false;                          // ab jetzt neue Runden nur noch per Button
+    setPhase('ended', RESULT_MS, () => {        // nach der Anzeige: Button oder warten
+        setPhase(playerCount() >= MIN_PLAYERS ? 'ready' : 'waiting');
     });
 }
 
@@ -205,6 +214,12 @@ io.on('connection', (socket) => {
         io.emit('names', [[pid, name]]);        // nur bei Änderung, nicht in jedem Positions-Paket
     });
 
+    socket.on('startRound', () => {             // Button "Neue Runde" – jeder Spieler darf ihn drücken
+        if (round.phase !== 'ready' || playerCount() < MIN_PLAYERS) return;
+        log(pid + ' startet eine neue Runde');
+        startCountdown();
+    });
+
     socket.on('clientInfo', (data) => {
         const now = Date.now();
         if (now - lastMsg < 20) return;         // max. ~50 Nachrichten/s pro Client
@@ -241,7 +256,10 @@ io.on('connection', (socket) => {
         names.delete(pid);
         io.emit('playerLeft', pid);
         log(pid + ' has left!');
-        if (Object.keys(players).length === 0) resetField();
+        if (Object.keys(players).length === 0) {
+            resetField();
+            autoStart = true;                   // alle weg: nächste erste Runde wieder automatisch
+        }
         checkRound();                           // evtl. Runde abbrechen
     });
 });
