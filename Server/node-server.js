@@ -13,11 +13,12 @@ const io = new Server(server, { maxHttpBufferSize: 1e4 }); // 10 KB statt 1 MB p
 
 app.disable('x-powered-by');
 app.get('/zauberw%C3%BCrfel', (req, res) => res.redirect(301, '/rubikscube'));
+const NO_CACHE = process.env.NO_CACHE === '1'; // zum Testen: NO_CACHE=1 node node-server.js
 app.use(express.static(PUBLIC, {
-    extensions: ['html'],                       // /about -> about.html, /rubikscube -> rubikscube.html
-    maxAge: '1d',                               // Bilder, Fonts, CSS, JS einen Tag cachen
+    extensions: ['html'],
+    maxAge: NO_CACHE ? 0 : '1d',
     setHeaders(res, file) {
-        if (file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+        if (NO_CACHE || file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
     }
 }));
 app.use((req, res) => res.status(404).sendFile(path.join(PUBLIC, '404.html')));
@@ -75,6 +76,69 @@ function resetField() {
     spawn(obstacles, OBSTACLES, null, true);
 }
 resetField();
+
+/* ---------- Spielrunden ----------
+   waiting   -> weniger als 2 Mäher, freies Spielen
+   countdown -> 10 s bis zum Start
+   running   -> 2 min Runde, Scores starten bei 0
+   ended     -> Ergebnis wird angezeigt
+   ready     -> nach einer Runde: Button "Neue Runde" statt automatischem Start */
+const MIN_PLAYERS = 2;
+const COUNTDOWN_MS = (Number(process.env.COUNTDOWN_SECONDS) || 10) * 1000; // zum Testen per Umgebungsvariable kürzbar
+const ROUND_MS = (Number(process.env.ROUND_SECONDS) || 120) * 1000;
+const RESULT_MS = 8000;
+const round = { phase: 'waiting', endsAt: 0, timer: null };
+let autoStart = true;   // erste Runde startet automatisch; nach einer Runde nur noch per Button.
+                        // Wird wieder true, wenn alle gegangen sind und ein neues Feld entsteht.
+
+const startCountdown = () => setPhase('countdown', COUNTDOWN_MS, startRound);
+
+const playerCount = () => Object.keys(players).length;
+const roundInfo = () => [round.phase, round.endsAt ? Math.max(round.endsAt - Date.now(), 0) : 0]; // [Phase, verbleibende ms]
+
+function setPhase(phase, duration = 0, next = null) {
+    clearTimeout(round.timer);
+    round.phase = phase;
+    round.endsAt = duration ? Date.now() + duration : 0;
+    round.timer = duration ? setTimeout(next, duration) : null;
+    io.emit('round', roundInfo());
+}
+
+/* Nach jedem Beitreten/Verlassen prüfen, ob eine Runde starten oder abbrechen muss */
+function checkRound() {
+    const enough = playerCount() >= MIN_PLAYERS;
+    if (round.phase === 'waiting' && enough) {
+        if (autoStart) startCountdown();
+        else setPhase('ready');                 // Button anzeigen statt automatisch starten
+    } else if (round.phase === 'ready' && !enough) {
+        setPhase('waiting');                    // Button weg, wenn nur noch einer da ist
+    } else if ((round.phase === 'countdown' || round.phase === 'running') && !enough) {
+        log('Runde abgebrochen: zu wenige Spieler');
+        setPhase('waiting');
+    }
+}
+
+function startRound() {
+    for (const sid in players) {                // alle Scores auf 0
+        players[sid].score = 0;
+        changed.add(sid);
+    }
+    log('Runde gestartet mit ' + playerCount() + ' Spielern');
+    setPhase('running', ROUND_MS, endRound);
+}
+
+function endRound() {
+    const ranking = Object.values(players)
+        .map(p => [p.id, names.get(p.id) || 'Unbekannt', p.score])
+        .sort((a, b) => b[2] - a[2]);           // [[id, name, score], ...] bester zuerst
+    io.emit('roundEnd', ranking);
+    log('Runde beendet, Gewinner: ' + (ranking[0] ? ranking[0][1] + ' (' + ranking[0][2] + ')' : '-'));
+
+    autoStart = false;                          // ab jetzt neue Runden nur noch per Button
+    setPhase('ended', RESULT_MS, () => {        // nach der Anzeige: Button oder warten
+        setPhase(playerCount() >= MIN_PLAYERS ? 'ready' : 'waiting');
+    });
+}
 
 function mow(sid, p) {
     const cx = p.x + MOWER / 2, cy = p.y + MOWER / 2;
@@ -137,6 +201,7 @@ io.on('connection', (socket) => {
     socket.emit('flowers', flowers);
     socket.emit('obstacles', obstacles);
     socket.emit('names', [...names]);           // Namen aller bisherigen Spieler
+    socket.emit('round', roundInfo());          // aktuelle Rundenphase
 
     socket.on('setName', (name) => {
         const now = Date.now();
@@ -147,6 +212,12 @@ io.on('connection', (socket) => {
         if (!name || names.get(pid) === name) return;
         names.set(pid, name);
         io.emit('names', [[pid, name]]);        // nur bei Änderung, nicht in jedem Positions-Paket
+    });
+
+    socket.on('startRound', () => {             // Button "Neue Runde" – jeder Spieler darf ihn drücken
+        if (round.phase !== 'ready' || playerCount() < MIN_PLAYERS) return;
+        log(pid + ' startet eine neue Runde');
+        startCountdown();
     });
 
     socket.on('clientInfo', (data) => {
@@ -163,6 +234,7 @@ io.on('connection', (socket) => {
             const c = Number.isInteger(color) && color >= 0 && color <= 6 ? color : 0;
             p = players[socket.id] = { id: pid, x: Math.round(x), y: Math.round(y), rot: 0, color: c, score: 0, moved: now, cooldown: 0 }; // Score beginnt IMMER bei 0
             changed.add(socket.id);
+            checkRound();                       // evtl. startet jetzt der Countdown
         }
         // Max. Schrittweite pro Nachricht -> kein Teleportieren
         const nx = Math.round(clamp(clamp(x, p.x - MAX_STEP, p.x + MAX_STEP), 0, W - MOWER));
@@ -184,7 +256,11 @@ io.on('connection', (socket) => {
         names.delete(pid);
         io.emit('playerLeft', pid);
         log(pid + ' has left!');
-        if (Object.keys(players).length === 0) resetField();
+        if (Object.keys(players).length === 0) {
+            resetField();
+            autoStart = true;                   // alle weg: nächste erste Runde wieder automatisch
+        }
+        checkRound();                           // evtl. Runde abbrechen
     });
 });
 

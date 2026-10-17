@@ -51,6 +51,7 @@ const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 let score = 0;
 let cooldown = 0;
 let lastUpdatedDate = performance.now();
+let dismissedRotationInfo = false;
 
 function isTouchScreen() {
     return 'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
@@ -82,7 +83,7 @@ socket.on('clientID', (data) => {
    genau zwischen zwei bekannten Positionen. So gibt es kein Ruckeln, auch wenn
    Pakete mal etwas früher oder später ankommen. */
 const INTERP_DELAY = 120;  // ms; muss größer sein als Server-Takt (60 ms) + Sendeintervall (40 ms) + etwas Puffer.
-                           // Ruckeln fremde Mäher bei schlechter Verbindung, diesen Wert um 20–40 erhöhen.
+// Ruckeln fremde Mäher bei schlechter Verbindung, diesen Wert um 20–40 erhöhen.
 const remoteMowers = new Map(); // Spieler-ID -> { snaps: [{ t, x, y, r }], cur: [x, y, r], color }
 let clockOffset = null;    // Unterschied zwischen eigener Uhr und Server-Uhr
 
@@ -156,15 +157,95 @@ socket.on('names', (list) => {
     for (const [id, name] of list) playerNames.set(id, name);
 });
 
+/* ---------- Spielrunden ---------- */
+const roundTimer = document.getElementById('round_timer');
+const roundBanner = document.getElementById('round_banner');
+const roundRestart = document.getElementById('round_restart');
+let roundPhase = 'waiting';
+let roundEndsAt = 0;          // lokale Zeit (performance.now), zu der die aktuelle Phase endet
+let bannerTimeout = null;
+
+/* Banner in der Bildschirmmitte: erste Zeile groß, weitere Zeilen klein.
+   textContent statt innerHTML, weil Spielernamen von Nutzern kommen. */
+function showBanner(lines, duration) {
+    roundBanner.replaceChildren(...lines.map((text, i) => {
+        const p = document.createElement('p');
+        p.textContent = text;
+        if (i === 0) p.className = 'banner_title';
+        return p;
+    }));
+    roundBanner.classList.add('visible');
+    clearTimeout(bannerTimeout);
+    if (duration) bannerTimeout = setTimeout(() => roundBanner.classList.remove('visible'), duration);
+}
+
+socket.on('round', ([phase, msLeft]) => {
+    const previous = roundPhase;
+    roundPhase = phase;
+    roundEndsAt = performance.now() + msLeft;
+
+    if (phase === 'running') showBanner(['Los!'], 1500);
+    if (phase === 'waiting' && previous === 'countdown') showBanner(['Start abgebrochen', 'Warte auf Mitspieler'], 3000);
+    if (phase === 'waiting' && previous === 'running') showBanner(['Runde abgebrochen', 'Zu wenige Mäher'], 3000);
+    updateRoundDisplay();
+});
+
+socket.on('roundEnd', (ranking) => {
+    const best = ranking.length ? ranking[0][2] : 0;
+    const winners = ranking.filter(([, , s]) => s === best);
+    let title;
+    if (best === 0) title = 'Niemand hat gemäht';
+    else if (winners.length > 1) title = 'Unentschieden!';
+    else if (winners[0][0] === clientID) title = 'Du hast gewonnen!';
+    else title = winners[0][1] + ' gewinnt!';
+
+    const lines = [title];
+    ranking.forEach(([id, name, s], i) => {     // Top 3 und immer der eigene Platz
+        if (i < 3 || id === clientID) lines.push((i + 1) + '. ' + (id === clientID ? 'Du' : name) + ' – ' + s);
+    });
+    showBanner(lines, 7000);
+});
+
+/* Countdown und Rundentimer aus der lokalen Endzeit berechnen (4× pro Sekunde) */
+function updateRoundDisplay() {
+    const secondsLeft = Math.ceil(Math.max(roundEndsAt - performance.now(), 0) / 1000);
+
+    if (roundPhase === 'countdown') {
+        showBanner(['Spiel startet in ' + secondsLeft]);
+    }
+    if (roundPhase === 'running') {
+        roundTimer.textContent = Math.floor(secondsLeft / 60) + ':' + String(secondsLeft % 60).padStart(2, '0');
+        roundTimer.classList.toggle('urgent', secondsLeft <= 10);
+    }
+    roundTimer.classList.toggle('visible', roundPhase === 'running');
+    roundRestart.classList.toggle('visible', roundPhase === 'ready');
+}
+
+roundRestart.addEventListener('click', () => {
+    roundRestart.classList.remove('visible');   // sofort weg, der Server schickt gleich den Countdown
+    socket.emit('startRound');
+});
+setInterval(updateRoundDisplay, 250);
+
 /* Position und Größe eines Namensschilds über einem Mäher (in Canvas-Koordinaten) */
 const tagWidths = new Map();               // Name -> Breite, damit nicht jedes Frame neu gemessen wird
+let tagFontReady = !document.fonts || document.fonts.check(TAG_FONT);
+if (!tagFontReady) {
+    document.fonts.load(TAG_FONT).then(() => {
+        tagFontReady = true;
+        tagWidths.clear();                 // evtl. falsch gemessene Breiten verwerfen
+    });
+}
+
 function nameTagRect(name, mowerX, mowerY) {
     let w = tagWidths.get(name);
     if (w === undefined) {
         ctx.font = TAG_FONT;
         w = Math.ceil(ctx.measureText(name).width) + TAG_PADDING * 2;
-        if (tagWidths.size > 200) tagWidths.clear();
-        tagWidths.set(name, w);
+        if (tagFontReady) {
+            if (tagWidths.size > 200) tagWidths.clear();
+            tagWidths.set(name, w);
+        }
     }
     const x = Math.round(Math.min(Math.max(mowerX + mowerSize / 2 - w / 2, 0), canvas.width - w));
     let y = Math.round(mowerY - TAG_HEIGHT - TAG_GAP);
@@ -467,7 +548,7 @@ function socketemit() {
             }
         }
     }
-    
+
     clientInfo = [startmowerPositionX, startmowerPositionY, mowerRotation, mowerColor, score];
     socket.emit('clientInfo', clientInfo);
 }
@@ -560,20 +641,45 @@ setInterval(() => {
 
 requestAnimationFrame(animate);
 
-/* Opacity 0 / 1 for Main when pressed Fullscreen button */
+function disableWelcomeMobile() {
+    document.getElementById('mobile_info').style.opacity = 0;
+}
+
+function enableWelcomeMobile() {
+    document.getElementById('mobile_info').style.opacity = 1;
+}
+
 function disableMain() {
+    document.getElementById('main_overlay').style.opacity = 0;
+    document.getElementById('fullscreen_btn').textContent = '-';
+    document.getElementById('horizontal_notification').style.opacity = 0;
+    document.getElementById('horizontal_notification').style.zIndex = 999;
+    document.getElementById("nav_select").style.display = 'none';
+}
+
+/* Nur einblenden – ohne mobileResizeFeature(), sonst rufen sich beide endlos gegenseitig auf */
+function showMain() {
+    document.getElementById('main_overlay').style.opacity = 1;
+    document.getElementById('fullscreen_btn').textContent = '+';
+}
+
+function enableMain() {
+    showMain();
+    mobileResizeFeature();
+}
+
+/* Opacity 0 / 1 for Main when pressed Fullscreen button */
+function toggleMain() {
     if (document.getElementById('main_overlay').style.opacity === "0") {
-        document.getElementById('main_overlay').style.opacity = 1;
-        document.getElementById('fullscreen_btn').textContent = '+';
+        enableMain();
     } else {
-        document.getElementById('main_overlay').style.opacity = 0;
-        document.getElementById('fullscreen_btn').textContent = '-';
+        disableMain();
     }
 }
 window.addEventListener('keyup', function (event) {
     if (event.keyCode === 27) {
         event.preventDefault();
-        disableMain();
+        toggleMain();
     }
 });
 
@@ -590,15 +696,31 @@ document.getElementById('warning').addEventListener('click', function () {
 function mobileResizeFeature() {
     if (window.innerWidth > 420 && window.innerHeight < 420) {
         document.getElementById("disableonmobile").style.display = 'none';
+        document.getElementById("nav_select").style.display = 'block';
+        disableMain();
+        enableWelcomeMobile();
     } else if (window.innerWidth < 435 && window.innerHeight > 435) {
         document.getElementById("disableonmobile").style.display = 'none';
+        document.getElementById("nav_select").style.display = 'block';
+        enableWelcomeMobile();
+
         if (isTouch) {
+            showMain();
+
             setTimeout(() => {
-                alert('Bitte drehen Sie Ihr Gerät ins Querformat!');
-            }, 250);
+                if (window.innerWidth < 435 && window.innerHeight > 435 && dismissedRotationInfo === false) {
+                    console.warn("Gerät im Hochformat! Für bessere sichtbarkeit ins Querformat drehen.")
+                    document.getElementById('horizontal_notification').style.opacity = 1;
+                    document.getElementById('horizontal_notification').style.zIndex = 9999;
+                    disableWelcomeMobile();
+                }
+            }, 3000);
         }
     } else {
         document.getElementById("disableonmobile").style.display = 'block';
+        document.getElementById("nav_select").style.display = 'none';
+        showMain();
+        disableWelcomeMobile();
     }
 }
 
@@ -607,7 +729,15 @@ function mobileResizeFeature() {
 const joystickContainer = document.getElementById('joystick-container');
 const joystick = document.getElementById('joystick');
 
+let joystickActive = false;  // Joystick nur aktiv, wenn die Berührung auf der Spielfläche begonnen hat
+let nameTagTouched = false;  // Berührung hat auf dem eigenen Namensschild begonnen
+
 function touchend() {
+    if (nameTagTouched) {
+        nameTagTouched = false;
+        openNameEditor();    // direkt hier öffnen, damit iOS die Tastatur zeigt
+    }
+    joystickActive = false;
     emulateKeyUpAll();
     joystickContainer.style.display = 'none';
     joystick.style.transform = 'translate(0, 0)';
@@ -657,11 +787,21 @@ function getDirection(x, y) {
 }
 
 window.addEventListener('touchstart', function (event) {
-    if (event.target === nameInput) return; // beim Antippen des Namensfelds keinen Joystick zeigen
-    let touch = event.touches[0];
+    const touch = event.touches[0];
+
+    // Auf Links, Buttons, Eingabefeld, Steuerleiste und Firefox-Hinweis: kein Joystick
+    if (event.target.closest('a, button, input, footer, #warning, #horizontal_notification, #horizontal_notification_text, #nav_select')) return;
+
+    // Auf dem eigenen Namensschild: Namen bearbeiten statt Joystick
+    if (!editingName && isOnOwnTag(touch.clientX, touch.clientY)) {
+        nameTagTouched = true;
+        return;
+    }
+
     const posX = touch.clientX - 40;
     const posY = touch.clientY - 40;
 
+    joystickActive = true;
     joystickContainer.style.display = 'flex';
 
     joystickContainer.style.top = posY + 'px';
@@ -669,7 +809,8 @@ window.addEventListener('touchstart', function (event) {
 });
 
 window.addEventListener('touchmove', function (event) {
-    if (joystickContainer.style.display !== 'none') {
+    nameTagTouched = false;  // Wischen ist kein Antippen
+    if (joystickActive) {
         let touch = event.touches[0];
         let posX = touch.clientX - 40 - joystickContainer.offsetLeft;
         let posY = touch.clientY - 40 - joystickContainer.offsetTop;
@@ -691,6 +832,18 @@ window.addEventListener('touchmove', function (event) {
 
         joystick.style.transform = 'translate(' + posX + 'px, ' + posY + 'px)';
     }
+});
+
+document.getElementById("horizontal_notification").addEventListener('touchend', function () {
+    dismissedRotationInfo = true;
+    document.getElementById('horizontal_notification').style.opacity = 0;
+    document.getElementById('horizontal_notification').style.zIndex = 999;
+    enableWelcomeMobile();
+});
+
+document.getElementById('nav_select').addEventListener('change', function () {
+    console.log('Gewählt:', this.value);
+    window.location.href = this.value;
 });
 
 window.addEventListener('touchcancel', touchend);
