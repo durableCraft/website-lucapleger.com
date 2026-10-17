@@ -13,11 +13,12 @@ const io = new Server(server, { maxHttpBufferSize: 1e4 }); // 10 KB statt 1 MB p
 
 app.disable('x-powered-by');
 app.get('/zauberw%C3%BCrfel', (req, res) => res.redirect(301, '/rubikscube'));
+const NO_CACHE = process.env.NO_CACHE === '1'; // zum Testen: NO_CACHE=1 node node-server.js
 app.use(express.static(PUBLIC, {
-    extensions: ['html'],                       // /about -> about.html, /rubikscube -> rubikscube.html
-    maxAge: '1d',                               // Bilder, Fonts, CSS, JS einen Tag cachen
+    extensions: ['html'],
+    maxAge: NO_CACHE ? 0 : '1d',
     setHeaders(res, file) {
-        if (file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+        if (NO_CACHE || file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
     }
 }));
 app.use((req, res) => res.status(404).sendFile(path.join(PUBLIC, '404.html')));

@@ -38,6 +38,32 @@
     }
 }
 
+@keyframes notification-rotate {
+    0% {
+        transform: rotate(90deg);
+    }
+
+    10% {
+        transform: rotate(90deg);
+    }
+
+    25% {
+        transform: rotate(0);
+    }
+
+    75% {
+        transform: rotate(0);
+    }
+
+    90% {
+        transform: rotate(90deg);
+    }
+
+    100% {
+        transform: rotate(90deg);
+    }
+}
+
 .defaultPath {
     font-weight: bold;
     font-family: 'Helvetica Neue';
@@ -306,6 +332,37 @@ footer #footer_overflow {
     padding: 20px;
     padding-left: 41px;
     z-index: 999;
+}
+
+#horizontal_notification {
+    position: absolute;
+
+    overflow: visible;
+
+    height: fit-content;
+    width: 180px;
+    max-width: 180px;
+    top: 0;
+    left: 0;
+
+    margin: 40px;
+
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: left;
+    align-content: center;
+}
+
+#horizontal_notification_text {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-content: center;
+}
+
+#notification_rotate {
+    transform: rotate(90deg);
+    animation: notification-rotate 5s ease-in-out infinite;
 }
 
 #score {

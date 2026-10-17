@@ -22,6 +22,8 @@
 
     <p id="dev_anzeige" style="display: none;"></p>
 
+    <div id="horizontal_notification" style="opacity: 0;"><p id="horizontal_notification_text">Noch besser: Gerät ins Querformat drehen.&nbsp;</p><div id="notification_rotate">&#x1F4F1;</div></div>
+
     <main id="main_overlay" style="opacity: 1;">
         <div id="disableonmobile">
             <h1 id="main_h1">Willkommen auf der offiziellen Webseite von</h1>
@@ -119,7 +121,7 @@
 
             <div id="footer_right" class="footer_part">
                 <p class="wasd_btn_description">Vollbild</p>
-                <button class="wasd_btn" id="fullscreen_btn" onclick="disableMain()">+</button>
+                <button class="wasd_btn" id="fullscreen_btn" onclick="toggleMain()">+</button>
             </div>
         </div>
     </footer>
