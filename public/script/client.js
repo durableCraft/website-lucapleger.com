@@ -51,6 +51,7 @@ const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 let score = 0;
 let cooldown = 0;
 let lastUpdatedDate = performance.now();
+let dismissedRotationInfo = false;
 
 function isTouchScreen() {
     return 'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
@@ -570,6 +571,14 @@ setInterval(() => {
 
 requestAnimationFrame(animate);
 
+function disableWelcomeMobile() {
+    document.getElementById('mobile_info').style.opacity = 0;
+}
+
+function enableWelcomeMobile() {
+    document.getElementById('mobile_info').style.opacity = 1;
+}
+
 function disableMain() {
     document.getElementById('main_overlay').style.opacity = 0;
     document.getElementById('fullscreen_btn').textContent = '-';
@@ -612,16 +621,23 @@ function mobileResizeFeature() {
         disableMain();
     } else if (window.innerWidth < 435 && window.innerHeight > 435) {
         document.getElementById("disableonmobile").style.display = 'none';
-        disableMain();
+        enableWelcomeMobile();
+
         if (isTouch) {
+            enableMain();
+
             setTimeout(() => {
-                console.warn("Gerät im Hochformat! Für bessere sichtbarkeit ins Querformat drehen.")
-                document.getElementById('horizontal_notification').style.opacity = 1;
-            }, 250);
+                if (window.innerWidth < 435 && window.innerHeight > 435 && dismissedRotationInfo === false) {
+                    console.warn("Gerät im Hochformat! Für bessere sichtbarkeit ins Querformat drehen.")
+                    document.getElementById('horizontal_notification').style.opacity = 1;
+                    disableWelcomeMobile();
+                }
+            }, 3000);
         }
     } else {
         document.getElementById("disableonmobile").style.display = 'block';
         enableMain();
+        disableWelcomeMobile();
     }
 }
 
@@ -737,6 +753,8 @@ window.addEventListener('touchmove', function (event) {
 
 document.getElementById("horizontal_notification").addEventListener('touchstart', function () {
     document.getElementById('horizontal_notification').style.opacity = 0;
+    dismissedRotationInfo = true;
+    enableWelcomeMobile();
 });
 
 window.addEventListener('touchcancel', touchend);
