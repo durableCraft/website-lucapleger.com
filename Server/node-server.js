@@ -9,9 +9,71 @@ const { Server } = require('socket.io');
 const PUBLIC = path.join(__dirname, '..', 'public'); // nur öffentliche Dateien liegen hier
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 1e4 }); // 10 KB statt 1 MB pro Nachricht
+/* ---------- Verbindungsschutz ----------
+   Max. Verbindungen pro IP + nur Verbindungen von der eigenen Seite (Origin-Prüfung) */
+const MAX_CONN_PER_IP = Number(process.env.MAX_CONN_PER_IP) || 10;
+const connPerIp = new Map(); // IP -> Anzahl offener Verbindungen
+
+/* Direkter Partner im LAN/localhost (= NPM) -> dann X-Real-IP vertrauen, sonst nicht (wäre fälschbar) */
+const PRIVATE_IP = /^(::ffff:)?(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)|^::1$|^f[cd]/i;
+function clientIp(req) {
+    const peer = req.socket.remoteAddress || '';
+    const real = req.headers['x-real-ip'];
+    return (PRIVATE_IP.test(peer) && typeof real === 'string' && real) ? real : peer;
+}
+
+/* Browser schicken bei fremden Seiten immer einen Origin-Header mit -> muss zum Host passen.
+   Ohne Origin (gleiche Seite bei GET-Polling, Nicht-Browser) wird zugelassen. */
+function sameOrigin(req) {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    try { return new URL(origin).host === req.headers.host; } catch (e) { return false; }
+}
+
+const io = new Server(server, {
+    maxHttpBufferSize: 1e4, // 10 KB statt 1 MB pro Nachricht
+    allowRequest(req, callback) {
+        if (!sameOrigin(req)) return callback('Origin nicht erlaubt', false);
+        if ((connPerIp.get(clientIp(req)) || 0) >= MAX_CONN_PER_IP) return callback('Zu viele Verbindungen', false);
+        callback(null, true);
+    }
+});
+
+/* Zählen auf Engine-Ebene: erfasst jede Verbindung, auch ohne Socket.IO-Namespace */
+io.engine.on('connection', (raw) => {
+    const ip = clientIp(raw.request);
+    connPerIp.set(ip, (connPerIp.get(ip) || 0) + 1);
+    raw.once('close', () => {
+        const n = connPerIp.get(ip) - 1;
+        if (n > 0) connPerIp.set(ip, n); else connPerIp.delete(ip);
+    });
+});
 
 app.disable('x-powered-by');
+
+/* ---------- Sicherheits-Header ----------
+   HSTS setzt NPM (dort wird TLS terminiert), daher hier nicht doppelt. */
+const SECURITY_HEADERS = {
+    'Content-Security-Policy': [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",   // style="..." in den HTML-Dateien
+        "img-src 'self' data:",               // data:-SVG in main.css
+        "font-src 'self'",
+        "connect-src 'self'",                 // Socket.IO (wss/https zur eigenen Domain)
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+    ].join('; '),
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+    'Cross-Origin-Opener-Policy': 'same-origin'
+};
+app.use((req, res, next) => { res.set(SECURITY_HEADERS); next(); });
+
 app.get('/zauberw%C3%BCrfel', (req, res) => res.redirect(301, '/rubikscube'));
 const NO_CACHE = process.env.NO_CACHE === '1'; // zum Testen: NO_CACHE=1 node node-server.js
 app.use(express.static(PUBLIC, {

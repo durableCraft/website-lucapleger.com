@@ -155,23 +155,19 @@
     <footer>
         <div id="footer_overflow">
             <div id="footer_left" class="footer_part">
-                <div class="wasd_div" ontouchstart="emulateKeyPress(65)" onmousedown="emulateKeyPress(65)"
-                    onmouseup="emulateKeyUp(65);">
+                <div class="wasd_div" data-key="65">
                     <button class="wasd_btn">A</button>
                     <p class="wasd_btn_description">Links</p>
                 </div>
-                <div class="wasd_div" ontouchstart="emulateKeyPress(87)" onmousedown="emulateKeyPress(87)"
-                    onmouseup="emulateKeyUp(87);">
+                <div class="wasd_div" data-key="87">
                     <button class="wasd_btn">W</button>
                     <p class="wasd_btn_description">Hoch</p>
                 </div>
-                <div class="wasd_div" ontouchstart="emulateKeyPress(83)" onmousedown="emulateKeyPress(83)"
-                    onmouseup="emulateKeyUp(83);">
+                <div class="wasd_div" data-key="83">
                     <button class="wasd_btn">S</button>
                     <p class="wasd_btn_description">Runter</p>
                 </div>
-                <div class="wasd_div" ontouchstart="emulateKeyPress(68);" onmousedown="emulateKeyPress(68)"
-                    onmouseup="emulateKeyUp(68);">
+                <div class="wasd_div" data-key="68">
                     <button class="wasd_btn">D</button>
                     <p class="wasd_btn_description">Rechts</p>
                 </div>
@@ -179,29 +175,13 @@
 
             <div id="footer_right" class="footer_part">
                 <p class="wasd_btn_description">Vollbild</p>
-                <button class="wasd_btn" id="fullscreen_btn" onclick="toggleMain()">+</button>
+                <button class="wasd_btn" id="fullscreen_btn">+</button>
             </div>
         </div>
     </footer>
 
     <script src="/socket.io/socket.io.min.js"></script>
-    <script src="script/client.js?v=5"></script>
-    <script>
-        "use strict";
-
-        window.addEventListener('keyup', function toggleDevTools(event) {
-            if (event.keyCode === 73) {
-                event.stopImmediatePropagation();;
-                event.preventDefault();
-
-                if (document.getElementById('dev_anzeige').style.display === 'none') {
-                    document.getElementById('dev_anzeige').style.display = 'block';
-                } else {
-                    document.getElementById('dev_anzeige').style.display = 'none';
-                }
-            }
-        });
-    </script>
+    <script src="script/client.js?v=6"></script>
 </body>
 
 </html>

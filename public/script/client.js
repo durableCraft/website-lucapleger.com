@@ -852,3 +852,22 @@ window.addEventListener('touchend', touchend);
 
 window.addEventListener('load', mobileResizeFeature);
 window.addEventListener('resize', mobileResizeFeature);
+
+/* ---------- Bedienelemente (früher Inline-Handler in index.html, jetzt CSP-kompatibel) ---------- */
+document.querySelectorAll('.wasd_div[data-key]').forEach((el) => {
+    const key = Number(el.dataset.key);
+    el.addEventListener('touchstart', () => emulateKeyPress(key), { passive: true });
+    el.addEventListener('mousedown', () => emulateKeyPress(key));
+    el.addEventListener('mouseup', () => emulateKeyUp(key));
+});
+document.getElementById('fullscreen_btn').addEventListener('click', toggleMain);
+
+/* Dev-Anzeige mit Taste "I" ein-/ausblenden */
+window.addEventListener('keyup', function toggleDevTools(event) {
+    if (event.keyCode === 73) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        const dev = document.getElementById('dev_anzeige');
+        dev.style.display = dev.style.display === 'none' ? 'block' : 'none';
+    }
+});
