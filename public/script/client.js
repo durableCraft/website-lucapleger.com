@@ -835,7 +835,7 @@ window.addEventListener('touchmove', function (event) {
 });
 
 document.getElementById("horizontal_notification").addEventListener('touchend', function () {
-    if (this.style.opacity !== 1) return;
+    if (this.style.opacity !== '1') return;
     dismissedRotationInfo = true;
     document.getElementById('horizontal_notification').style.opacity = 0;
     document.getElementById('horizontal_notification').style.zIndex = 999;
